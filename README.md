@@ -73,6 +73,51 @@ YNU-xk_spider 是一个针对云南大学选课系统的自动化工具，提供
 
 3. 修改 `AutoLogin.py` 中的 `imgcode_online` 函数，调整 API 请求路径。
 
+```python
+def imgcode_online(imgurl):
+    if not hasattr(imgcode_online, "counter"):
+        imgcode_online.counter = 0
+    if not hasattr(imgcode_online, "timestamp"):
+        imgcode_online.timestamp = time.time()
+
+    current_time = time.time()
+    if current_time - imgcode_online.timestamp > 60:
+        imgcode_online.counter = 0
+        imgcode_online.timestamp = current_time
+
+    imgcode_online.counter += 1
+    if imgcode_online.counter > 10:
+        imgcode_online.counter = 0
+        imgcode_online.timestamp = current_time
+        return False
+
+    # Convert base64 image to bytes
+    img_data = base64.b64decode(imgurl.split(",")[-1])
+    files = {'image': ('image.jpg', img_data)}
+    response = requests.post('云函数给你的访问路径url/ocr/file/json', files=files)
+
+    if response.text:
+        try:
+            result = json.loads(response.text)
+            if result['status'] == 200:
+                print(result['result'])
+                return result['result']
+            elif result['status'] != 200:
+                time.sleep(10)
+                return imgcode_online(imgurl)
+            else:
+                print(result['msg'])
+                return 'error'
+        except json.JSONDecodeError:
+            print("Invalid JSON received")
+            return 'error'
+    else:
+        print("Empty response received")
+        return 'error'
+```
+
+
+
 ## 成功示例
 
 以下为余课提醒和自动抢课的成功示例：
