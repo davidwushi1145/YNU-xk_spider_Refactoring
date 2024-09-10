@@ -26,7 +26,11 @@ class GetCourse:
         self.stdCode = stdCode
 
     def judge(self, course_name, teacher, key='', kind='素选'):
-        classtype = "XGXK" if kind == '素选' else "FANKC"
+        kind_map = {
+            '素选': ('XGXK', 'publicCourse'),
+            '主修': ('FANKC', 'programCourse')
+        }
+        classtype, kind = kind_map.get(kind, ('FANKC', 'programCourse'))
         url = f'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/{kind}.do'
 
         while True:
