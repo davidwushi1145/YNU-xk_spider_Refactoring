@@ -10,7 +10,7 @@ CONFIG = {
     'programCourse': [
         # ['启发式与元启发式算法', '江华'],
     ],
-    'peCourse': [
+    'peCourses': [
         # ['羽毛球（四）', '范丽霞'],
     ],
 }
