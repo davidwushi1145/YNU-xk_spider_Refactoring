@@ -44,7 +44,6 @@ class AutoLogin:
     def get_params(self):
         self.start_timer()
         self.driver.get(self.url)
-        self._wait_for_element(By.ID, 'vcodeImg')
 
         # 获取验证码并进行处理
         vcode = self._handle_captcha()
@@ -62,26 +61,47 @@ class AutoLogin:
         return self._process_course_selection()
 
     def _wait_for_element(self, by, identifier, timeout=15):
-        return WebDriverWait(self.driver, timeout).until(EC.presence_of_element_located((by, identifier)))
+        print(f"Waiting for element {identifier} to be present")
+        try:
+            element = WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((by, identifier))
+            )
+            print(f"Element {identifier} is now present.")
+            return element
+        except Exception as e:
+            print(f"Failed to locate element {identifier} within {timeout} seconds: {e}")
+            raise
 
     def _handle_captcha(self):
-        max_refresh_attempts = 5
+        max_refresh_attempts = 3  # 最大刷新次数
         refresh_attempts = 0
 
         while refresh_attempts < max_refresh_attempts:
-            img_tag = self._wait_for_element(By.ID, 'vcodeImg', timeout=10)
-            src = img_tag.get_attribute('src')
+            try:
+                # 等待验证码图片元素加载
+                time.sleep(2)
+                img_tag = self._wait_for_element(By.ID, 'vcodeImg', timeout=10)
+                src = img_tag.get_attribute('src')
 
-            if src:
-                base64_img = img_to_base64(src)
-                return imgcode_online(base64_img)
+                if src:
+                    print(f"Captcha image loaded: {src}")
+                    # 将图片转为 Base64 并发送到识别接口
+                    base64_img = img_to_base64(src)
+                    vcode = imgcode_online(base64_img)
+                    if vcode:
+                        print(f"Captcha recognized: {vcode}")
+                        return vcode
 
-            # 如果验证码未加载，等待 3 秒后再刷新页面
+                print("Captcha image src is empty, refreshing page...")
+            except Exception as e:
+                print(f"Error while handling captcha: {e}")
+
+            # 刷新页面并增加等待时间
             time.sleep(3)
             self.driver.refresh()
             refresh_attempts += 1
 
-        print("验证码图像加载失败，达到最大刷新次数")
+        print("Captcha image loading failed after maximum attempts.")
         return False
 
     def _input_credentials(self, vcode):
@@ -92,13 +112,21 @@ class AutoLogin:
     def _login(self):
         login_ele = self.driver.find_element(By.ID, 'studentLoginBtn')
         login_ele.click()
+        time.sleep(1)
+        flag = 0
 
-        for _ in range(3):  # 最多尝试三次
-            try:
-                error_message = self.driver.find_element(By.ID, 'errorMsg')
+        while True:
+            if flag < 3:
+                error_message = self.driver.find_element(By.XPATH, '//button[@id="errorMsg"]')
                 error_text = error_message.text
 
                 if "验证码不正确" in error_text:
+                    flag += 1
+                    self.driver.find_element(By.ID, 'loginName').clear()
+                    self.driver.find_element(By.ID, 'loginPwd').clear()
+                    self.driver.find_element(By.ID, 'verifyCode').clear()
+                    self.driver.find_element(By.ID, 'vcodeImg').click()
+                    time.sleep(1)
                     vcode = self._handle_captcha()
                     if not vcode:
                         return False
@@ -109,20 +137,25 @@ class AutoLogin:
                     return False
                 else:
                     break
-            except TimeoutException:
-                pass
-
         return True
 
     def _process_course_selection(self):
         try:
-            self._wait_for_element(By.XPATH, '//button[@class="bh-btn cv-btn bh-btn-primary bh-pull-right"]')
+            WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.XPATH, '//button[@class="bh-btn '
+                                                                                          'cv-btn bh-btn-primary '
+                                                                                          'bh-pull-right"]')))
             self.driver.find_element(By.XPATH, '//button[@class="bh-btn cv-btn bh-btn-primary bh-pull-right"]').click()
-
-            self._wait_for_element(By.ID, 'courseBtn')
-            self.driver.execute_script("arguments[0].click();", self.driver.find_element(By.ID, 'courseBtn'))
         except TimeoutException:
-            print("在尝试点击时发生超时。")
+            pass
+
+        self._wait_for_element(By.XPATH, '//button[@class="bh-btn bh-btn bh-btn-primary bh-pull-right"]')
+        self.driver.find_element(By.XPATH, '//button[@class="bh-btn bh-btn bh-btn-primary bh-pull-right"]').click()
+        time.sleep(1)
+        try:
+            self._wait_for_element(By.XPATH, '//button[@id="courseBtn"]')
+            self.driver.find_element(By.XPATH, '//button[@id="courseBtn"]').click()
+        except TimeoutException:
+            print("Failed to locate course selection button")
             return False
 
         if self._wait_for_element(By.ID, 'aPublicCourse', timeout=8):

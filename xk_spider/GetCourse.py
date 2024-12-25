@@ -26,12 +26,12 @@ class GetCourse:
 
     def judge(self, course_name, teacher, key='', kind='素选'):
         kind_map = {
-            '素选': ('XGXK', 'publicCourse'),
-            '主修': ('FANKC', 'programCourse'),
-            '体育': ('TYKC', 'programCourse')
+            '素选': ('XGXK', 'publicCourse.do'),
+            '主修': ('FANKC', 'programCourse.do'),
+            '体育': ('TYKC', 'programCourse.do')
         }
         classtype, kind = kind_map.get(kind, ('FANKC', 'programCourse'))
-        url = f'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/{kind}.do'
+        url = f'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/{kind}'
 
         while True:
             try:
