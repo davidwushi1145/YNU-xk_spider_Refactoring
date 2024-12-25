@@ -1,9 +1,8 @@
 import ast
 import random
 import re
-import time
-
 import requests
+import time
 from requests.exceptions import HTTPError
 from requests.utils import dict_from_cookiejar
 
@@ -28,7 +27,8 @@ class GetCourse:
     def judge(self, course_name, teacher, key='', kind='素选'):
         kind_map = {
             '素选': ('XGXK', 'publicCourse'),
-            '主修': ('FANKC', 'programCourse')
+            '主修': ('FANKC', 'programCourse'),
+            '体育': ('TYKC', 'programCourse')
         }
         classtype, kind = kind_map.get(kind, ('FANKC', 'programCourse'))
         url = f'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/{kind}.do'
@@ -121,7 +121,7 @@ class GetCourse:
                 "electiveBatchCode": self.batchcode,
                 "teachingClassId": classid,
                 "isMajor": "1",
-                "campus": "05",
+                "campus": "05",  # 01代表东陆校区
                 "teachingClassType": classtype
             }
         }
@@ -131,7 +131,7 @@ class GetCourse:
         data = {
             "data": {
                 "studentCode": self.stdcode,
-                "campus": "05",
+                "campus": "05",  # 01代表东陆校区
                 "electiveBatchCode": self.batchcode,
                 "isMajor": "1",
                 "teachingClassType": classtype,

@@ -1,5 +1,4 @@
 import logging
-
 from fake_useragent import UserAgent
 
 from config import CONFIG  # 配置文件中的配置信息
@@ -37,7 +36,7 @@ def process_single_course(course_name, teacher, gc, key, kind):
         return False
 
 
-def process_courses(publicCourses, programCourse, headers, stdCode, batchCode, driver, url, path, key):
+def process_courses(publicCourses, programCourse, peCourses, headers, stdCode, batchCode, driver, url, path, key):
     """处理所有课程的主函数（串行执行）"""
     gc = GetCourse(headers, stdCode, batchCode, driver, url, path, stdCode)
 
@@ -53,6 +52,12 @@ def process_courses(publicCourses, programCourse, headers, stdCode, batchCode, d
         if not result:
             break  # 如果选课失败，则终止当前循环
 
+    # 依次处理体育课程
+    for course in peCourses:
+        result = process_single_course(course[0], course[1], gc, key, kind='体育')
+        if not result:
+            break
+
 
 def main():
     """主函数，控制整个流程"""
@@ -66,7 +71,8 @@ def main():
             headers['Token'] = Token
             headers['Authorization'] = 'Bearer ' + Token
 
-            process_courses(CONFIG['publicCourses'], CONFIG['programCourse'], headers, CONFIG['stdCode'], batchCode,
+            process_courses(CONFIG['publicCourses'], CONFIG['programCourse'], CONFIG['peCourses'], headers,
+                            CONFIG['stdCode'], batchCode,
                             None, CONFIG['url'], CONFIG['path'], CONFIG['key'])
 
         except Exception as e:
