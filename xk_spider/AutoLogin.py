@@ -3,6 +3,8 @@ import base64
 import json
 import threading
 import time
+import ddddocr
+import binascii
 from urllib.parse import urlparse, parse_qs
 
 import requests
@@ -15,19 +17,31 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 
 class AutoLogin:
-    def __init__(self, url, path, name='', pswd=''):
+    def __init__(self, url, driver_path, chrome_path, name='', pswd='', api=None, log_queue=None):
         self.timer = None
         self.name = name
         self.url = url
         self.pswd = pswd
-        self.driver = self._initialize_driver(path)
+        self.driver = self._initialize_driver(driver_path, chrome_path)
+        self.api = api
+        self.ocr = ddddocr.DdddOcr() if api is None else None
+        if api is None:
+            self.ocr.set_ranges(6)
+        self.log_queue = log_queue
 
-    def _initialize_driver(self, path):
+    def _initialize_driver(self, driver_path, chrome_path):
         chrome_options = Options()
+        chrome_options.binary_location = chrome_path  # 指定浏览器的路径
         chrome_options.add_argument("--headless")  # 启用无界面模式
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920x1080')
-        return webdriver.Chrome(executable_path=path, options=chrome_options)
+        return webdriver.Chrome(executable_path=driver_path, options=chrome_options)
+
+    def _push_log(self, message):
+        if self.log_queue:
+            self.log_queue.put(message)
+        else:
+            print(message)
 
     def start_timer(self, timeout=60.0):
         self.timer = threading.Timer(timeout, self.close_driver)
@@ -61,15 +75,15 @@ class AutoLogin:
         return self._process_course_selection()
 
     def _wait_for_element(self, by, identifier, timeout=15):
-        print(f"Waiting for element {identifier} to be present")
+        self._push_log(f"Waiting for element {identifier} to be present...")
         try:
             element = WebDriverWait(self.driver, timeout).until(
                 EC.presence_of_element_located((by, identifier))
             )
-            print(f"Element {identifier} is now present.")
+            self._push_log(f"Element {identifier} is now present.")
             return element
         except Exception as e:
-            print(f"Failed to locate element {identifier} within {timeout} seconds: {e}")
+            self._push_log(f"Failed to locate element {identifier} within {timeout} seconds: {e}")
             raise
 
     def _handle_captcha(self):
@@ -84,24 +98,25 @@ class AutoLogin:
                 src = img_tag.get_attribute('src')
 
                 if src:
-                    print(f"Captcha image loaded: {src}")
+                    self._push_log(f"Captcha image loaded: {src}")
                     # 将图片转为 Base64 并发送到识别接口
                     base64_img = img_to_base64(src)
-                    vcode = imgcode_online(base64_img)
+                    vcode = imgcode_local(self.ocr, base64_img) if self.api is None else imgcode_online(self.api,
+                                                                                                        base64_img)
                     if vcode:
-                        print(f"Captcha recognized: {vcode}")
+                        self._push_log(f"Captcha recognized: {vcode}")
                         return vcode
 
-                print("Captcha image src is empty, refreshing page...")
+                self._push_log("Captcha image src is empty, refreshing page...")
             except Exception as e:
-                print(f"Error while handling captcha: {e}")
+                self._push_log(f"Error while handling captcha: {e}")
 
             # 刷新页面并增加等待时间
             time.sleep(3)
             self.driver.refresh()
             refresh_attempts += 1
 
-        print("Captcha image loading failed after maximum attempts.")
+        self._push_log("Captcha image loading failed after maximum attempts.")
         return False
 
     def _input_credentials(self, vcode):
@@ -121,6 +136,7 @@ class AutoLogin:
                 error_text = error_message.text
 
                 if "验证码不正确" in error_text:
+                    self._push_log("验证码不正确")
                     flag += 1
                     self.driver.find_element(By.ID, 'loginName').clear()
                     self.driver.find_element(By.ID, 'loginPwd').clear()
@@ -133,6 +149,11 @@ class AutoLogin:
                     self._input_credentials(vcode)
                     login_ele.click()
                 elif "认证失败" in error_text:
+                    self._push_log(-100)
+                    self.close_driver()
+                    return False
+                elif "登录名或密码不正确" in error_text:
+                    self._push_log(-101)
                     self.close_driver()
                     return False
                 else:
@@ -155,13 +176,13 @@ class AutoLogin:
             self._wait_for_element(By.XPATH, '//button[@id="courseBtn"]')
             self.driver.find_element(By.XPATH, '//button[@id="courseBtn"]').click()
         except TimeoutException:
-            print("Failed to locate course selection button")
+            self._push_log("Failed to locate course selection button")
             return False
 
         if self._wait_for_element(By.ID, 'aPublicCourse', timeout=8):
             return self._extract_params()
 
-        print('page load failed')
+        self._push_log('page load failed')
         self.close_driver()
         return False
 
@@ -180,11 +201,11 @@ class AutoLogin:
         return query_params.get('token', [None])[0]
 
 
-def imgcode_online(imgurl):
+def imgcode_online(api, imgurl):
     retry_limit = 10
     for _ in range(retry_limit):
         d = {'data': imgurl}
-        response = requests.post('http://127.0.0.1:5000/base64img', data=d)
+        response = requests.post(api, data=d)
 
         if response.text:
             try:
@@ -201,8 +222,32 @@ def imgcode_online(imgurl):
     return False
 
 
+def imgcode_local(ocr, imgurl):
+    retry_limit = 10
+    for _ in range(retry_limit):
+        if isBase64Img(imgurl):
+            data = imgurl.split(',')[1]
+            image_data = base64.b64decode(data)
+            res = ocr.classification(image_data)
+            if not res:
+                time.sleep(10)
+            return str(res)
+        else:
+            time.sleep(10)
+
+    return False
+
+
 def img_to_base64(img_url):
     response = requests.get(img_url)
     if not response:
         return False
     return 'data:image/jpeg;base64,' + base64.b64encode(response.content).decode('utf-8')
+
+
+def isBase64Img(str_img):
+    try:
+        base64_img = str_img.split(',')[1]
+        return base64.b64decode(base64_img)
+    except binascii.Error:
+        return False
