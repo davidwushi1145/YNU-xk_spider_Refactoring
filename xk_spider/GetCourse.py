@@ -10,12 +10,12 @@ from requests.utils import dict_from_cookiejar
 def to_wechat(key, title, string):
     url = f'https://sctapi.ftqq.com/{key}.send'
     dic = {'text': title, 'desp': string}
-    requests.get(url, params=dic)
+    requests.get(url, params=dic, verify=False)
     return f'{title}：已发送至微信'
 
 
 class GetCourse:
-    def __init__(self, headers: dict, stdcode, batchcode, driver, url, path, stdCode):
+    def __init__(self, headers: dict, stdcode, batchcode, driver, url, path, stdCode, campus, log_queue=None):
         self.driver = driver
         self.headers = headers
         self.stdcode = stdcode
@@ -23,6 +23,14 @@ class GetCourse:
         self.url = url
         self.path = path
         self.stdCode = stdCode
+        self.campus = campus
+        self.log_queue = log_queue
+
+    def _push_log(self, message):
+        if self.log_queue:
+            self.log_queue.put(message)
+        else:
+            print(message)
 
     def judge(self, course_name, teacher, key='', kind='素选'):
         kind_map = {
@@ -33,36 +41,36 @@ class GetCourse:
         classtype, kind = kind_map.get(kind, ('FANKC', 'programCourse'))
         url = f'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/{kind}'
 
-        while True:
-            try:
-                response = self._make_request(url, self.__judge_datastruct(course_name, classtype))
-                if not response:
-                    to_wechat(key, f'{course_name} 查询失败，请检查失败原因', '线程结束')
-                    return False
-
-                res_data = self._parse_response(response)
-                if not res_data:
-                    print('登录失效，请重新登录')
-                    return False
-
-                datalist = res_data['dataList'] if kind == 'publicCourse.do' else res_data['dataList'][0]['tcList']
-
-                for course in datalist:
-                    remain = int(course['classCapacity']) - int(course['numberOfFirstVolunteer'])
-                    if remain > 0 and course['teacherName'] == teacher:
-                        string = f'{course_name} {teacher}：{remain}人空缺'
-                        print(string)
-                        to_wechat(key, f'{course_name} 余课提醒', string)
-                        result = self.post_add(course_name, teacher, classtype, course['teachingClassID'], key)
-                        if '添加选课志愿成功' in result:
-                            return result
-
-                print(f'{course_name} {teacher}：人数已满 {time.ctime()}')
-                time.sleep(random.randint(3, 10))
-
-            except (HTTPError, SyntaxError) as e:
-                print(f'Error: {e}. 登录失效，请重新登录')
+        try:
+            response = self._make_request(url, self.__judge_datastruct(course_name, classtype))
+            if not response:
+                to_wechat(key, f'{course_name} 查询失败，请检查失败原因', '线程结束')
+                self._push_log(f'{course_name} 查询失败，请检查失败原因')
                 return False
+
+            res_data = self._parse_response(response)
+            if not res_data:
+                self._push_log('登录失效，请重新登录')
+                return False
+
+            datalist = res_data['dataList'] if kind == 'publicCourse.do' else res_data['dataList'][0]['tcList']
+
+            for course in datalist:
+                remain = int(course['classCapacity']) - int(course['numberOfFirstVolunteer'])
+                if remain > 0 and course['teacherName'] == teacher:
+                    string = f'{course_name} {teacher}：{remain}人空缺'
+                    self._push_log(string)
+                    to_wechat(key, f'{course_name} 余课提醒', string)
+                    result = self.post_add(course_name, teacher, classtype, course['teachingClassID'], key)
+                    if '添加选课志愿成功' in result:
+                        return result
+
+            self._push_log(f'{course_name} {teacher}：人数已满 {time.ctime()}')
+            time.sleep(random.randint(3, 10))
+
+        except (HTTPError, SyntaxError) as e:
+            self._push_log(f'Error: {e}. 登录失效，请重新登录')
+            return False
 
     def post_add(self, classname, teacher, classtype, classid, key):
         url = 'http://xk.ynu.edu.cn/xsxkapp/sys/xsxkapp/elective/volunteer.do'
@@ -78,12 +86,12 @@ class GetCourse:
 
     def _make_request(self, url, data):
         try:
-            response = requests.post(url, data=data, headers=self.headers)
+            response = requests.post(url, data=data, headers=self.headers, verify=False)
             response.raise_for_status()
             self._update_cookies(response.cookies)
             return response
         except HTTPError as e:
-            print(f'Request failed: {e}')
+            self._push_log(f'Request failed: {e}')
             return None
 
     def _retry_request(self, url, data, key, classname, retries=3):
@@ -91,7 +99,7 @@ class GetCourse:
             response = self._make_request(url, data)
             if response:
                 return response
-            print(f'[warning]: post_add()函数正尝试再次请求 (第 {attempt + 1} 次)')
+            self._push_log(f'[warning]: post_add()函数正尝试再次请求 (第 {attempt + 1} 次)')
             time.sleep(3)
         to_wechat(key, f'{classname} 有余课，但post未成功', '线程结束')
         return None
@@ -107,7 +115,7 @@ class GetCourse:
                     self.headers['cookie'] = re.sub(f'{cookie_name}=.+?; ', match.group(0),
                                                     self.headers.get('cookie', ''))
 
-            print(f'[current cookie]: {self.headers.get("cookie", "")}')
+            self._push_log(f'[current cookie]: {self.headers.get("cookie", "")}')
 
     def _parse_response(self, response):
         temp = response.text.replace('null', 'None').replace('false', 'False').replace('true', 'True')
@@ -121,7 +129,7 @@ class GetCourse:
                 "electiveBatchCode": self.batchcode,
                 "teachingClassId": classid,
                 "isMajor": "1",
-                "campus": "05",  # 01代表东陆校区
+                "campus": "05" if self.campus == '呈贡校区' else "01",  # 01代表东陆校区
                 "teachingClassType": classtype
             }
         }

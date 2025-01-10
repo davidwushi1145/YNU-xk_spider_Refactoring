@@ -17,7 +17,7 @@ YNU-xk_spider 是一个针对云南大学选课系统的自动化工具，提供
 - **2024-6-26**：进一步优化和修复，提升稳定性。
 - **2024-9-9**：修复若干bug，代码架构完全重构。
 - **2024-12-25**：修复体育课问题及东陆校区问题（注意！！！东陆校区需要修改[GetCourse.py](xk_spider/GetCourse.py)表单中的campus为01）
-- 感谢[MaLaNg116](https://github.com/MaLaNg116)提供的[打包好的exe版本](https://github.com/MaLaNg116/YNU-xk_spider_Refactoring/releases)
+- **2025-1-10**：修复部分兼容性bug，新增GUI界面，封装环境以及chrome，实现即下即用。
 ## 环境要求
 
 - **Python 版本**：3.10
@@ -34,7 +34,14 @@ YNU-xk_spider 是一个针对云南大学选课系统的自动化工具，提供
 - **余课提醒**：通过 server 酱接口将余课信息发送至微信，用户需自行从 [server 酱官网](https://sct.ftqq.com/) 获取 key，并关注 "方糖" 服务号。
 - **自动抢课**：支持主修（包括必修和专选）、素选课程及体育课的提醒与抢课功能（跨专业选修课程未测试）。
 
-## 使用步骤
+## 使用步骤（GUI分支）
+1. **下载程序**：下载Release中的exe文件，解压后双击运行。
+2. **填写配置**：打开程序后，按照提示填写配置信息。
+3. **启动程序**：点击开始按钮，程序将自动开始。
+
+如要继续开发，请按照 [globals.py](xk_spider/globals.py) 中的chrome配置路径重新配置chrome。
+
+## 使用步骤（main分支）
 
 1. **安装环境**：确保 Python 和所需依赖库已安装，下载并解压本程序。
 2. **切换目录**：进入 `YNU-xk_spider-master` 目录。
