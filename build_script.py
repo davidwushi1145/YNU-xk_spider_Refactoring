@@ -7,7 +7,6 @@ PyInstaller.__main__.run([
     '--onefile',
     '--add-data', 'xk_spider/AutoLogin.py;.',
     '--add-data', 'xk_spider/GetCourse.py;.',
-    '--add-data', 'xk_spider/config.py.py;.',
     f'--add-data={fake_useragent_data_path};fake_useragent/data',
     '--hidden-import=fake_useragent',
     '--hidden-import=concurrent.futures',

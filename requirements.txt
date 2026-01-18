@@ -1,5 +1,3 @@
-selenium == 4.1.0
-requests
-flask == 3.0.0
-ddddocr == 1.5.5
-fake_useragent
+selenium>=4.1.0
+requests>=2.25.1
+ddddocr>=1.4.0
