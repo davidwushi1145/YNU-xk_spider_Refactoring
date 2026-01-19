@@ -30,26 +30,48 @@ class CaptchaSolver(ABC):
 
 
 class DdddocrSolver(CaptchaSolver):
-    """Captcha solver using ddddocr library.
+    """Captcha solver using ddddocr library optimized for 4-char alphanumeric codes.
+
+    Optimized for YNU captcha format:
+    - Length: 4 characters
+    - Charset: 0-9, a-z, A-Z (alphanumeric)
+    - Format: Mixed case letters and numbers
 
     Attributes:
         _ocr: ddddocr instance (lazy initialized).
         _min_length: Minimum valid captcha length.
         _max_length: Maximum valid captcha length.
+        _beta: Use beta OCR model.
+        _charset_range: Character set constraint (6 = a-z + A-Z + 0-9).
+        _png_fix: Enable PNG transparent background fix.
     """
 
     def __init__(
         self,
-        min_length: int = 1,
-        max_length: int = 10,
+        min_length: int = 4,
+        max_length: int = 4,
         show_ad: bool = False,
+        beta: bool = False,
+        charset_range: int = 6,
+        png_fix: bool = True,
     ) -> None:
         """Initialize solver with validation parameters.
 
         Args:
-            min_length: Minimum expected captcha length.
-            max_length: Maximum expected captcha length.
+            min_length: Minimum expected captcha length (default: 4).
+            max_length: Maximum expected captcha length (default: 4).
             show_ad: Whether to show ddddocr advertisement.
+            beta: Use beta OCR model (alternative recognition engine).
+            charset_range: Character set constraint:
+                0 = digits only (0-9)
+                1 = lowercase only (a-z)
+                2 = uppercase only (A-Z)
+                3 = letters (a-z + A-Z)
+                4 = lowercase + digits (a-z + 0-9)
+                5 = uppercase + digits (A-Z + 0-9)
+                6 = alphanumeric (a-z + A-Z + 0-9) [default for YNU]
+                7 = full charset
+            png_fix: Enable PNG transparent background fix.
         """
         if min_length < 1:
             raise ValueError("min_length must be >= 1")
@@ -58,16 +80,28 @@ class DdddocrSolver(CaptchaSolver):
         self._min_length = min_length
         self._max_length = max_length
         self._show_ad = show_ad
+        self._beta = beta
+        self._charset_range = charset_range
+        self._png_fix = png_fix
         self._ocr: Optional[Any] = None
 
     def _get_ocr(self) -> Any:
-        """Lazy initialize ddddocr instance."""
+        """Lazy initialize ddddocr instance with optimized settings."""
         if self._ocr is None:
             try:
                 import ddddocr
 
-                self._ocr = ddddocr.DdddOcr(show_ad=self._show_ad)
-                logger.debug("ddddocr initialized")
+                self._ocr = ddddocr.DdddOcr(show_ad=self._show_ad, beta=self._beta)
+                
+                # Set character range for alphanumeric recognition
+                self._ocr.set_ranges(self._charset_range)
+                
+                logger.info(
+                    "ddddocr initialized: beta=%s, charset_range=%d, png_fix=%s",
+                    self._beta,
+                    self._charset_range,
+                    self._png_fix,
+                )
             except ImportError as exc:
                 raise CaptchaError("ddddocr not installed") from exc
             except Exception as exc:
@@ -75,13 +109,13 @@ class DdddocrSolver(CaptchaSolver):
         return self._ocr
 
     def solve(self, image_bytes: bytes) -> str:
-        """Recognize captcha using ddddocr.
+        """Recognize captcha using ddddocr with optimized settings.
 
         Args:
-            image_bytes: Raw image data.
+            image_bytes: Raw image data (PNG/JPEG).
 
         Returns:
-            Recognized and validated captcha text.
+            Recognized and validated captcha text (4 alphanumeric characters).
 
         Raises:
             CaptchaError: If recognition fails or result is invalid.
@@ -91,7 +125,9 @@ class DdddocrSolver(CaptchaSolver):
 
         try:
             ocr = self._get_ocr()
-            result = ocr.classification(image_bytes)  # type: ignore
+            
+            # Use png_fix for transparent background PNG images
+            result = ocr.classification(image_bytes, png_fix=self._png_fix)  # type: ignore
 
             if not result:
                 raise CaptchaError("OCR returned empty result")
@@ -100,15 +136,15 @@ class DdddocrSolver(CaptchaSolver):
 
             if len(result_str) < self._min_length:
                 raise CaptchaError(
-                    f"Captcha too short: {len(result_str)} < {self._min_length}"
+                    f"Captcha too short: {len(result_str)} < {self._min_length} (got: '{result_str}')"
                 )
 
             if len(result_str) > self._max_length:
                 raise CaptchaError(
-                    f"Captcha too long: {len(result_str)} > {self._max_length}"
+                    f"Captcha too long: {len(result_str)} > {self._max_length} (got: '{result_str}')"
                 )
 
-            logger.debug("Captcha recognized: %s", result_str)
+            logger.debug("Captcha recognized: %s (length: %d)", result_str, len(result_str))
             return result_str
 
         except CaptchaError:
