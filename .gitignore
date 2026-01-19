@@ -1,5 +1,6 @@
-logs
+logs/
 .idea/
 .ace-tool/
 .claude/
 config.json
+**/__pycache__/

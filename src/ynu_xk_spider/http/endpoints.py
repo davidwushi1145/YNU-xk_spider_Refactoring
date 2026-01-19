@@ -56,6 +56,20 @@ class Endpoints:
         """
         return f"{self._base}/xsxkapp/sys/xsxkapp/elective/volunteer.do?token={token}"
 
+    def course_result(self, student_code: str, batch_code: str) -> str:
+        """Build URL for querying selected courses.
+
+        Args:
+            student_code: Student ID.
+            batch_code: Course selection batch code.
+
+        Returns:
+            Fully qualified API URL.
+        """
+        import time
+        timestamp = int(time.time() * 1000)
+        return f"{self._base}/xsxkapp/sys/xsxkapp/elective/courseResult.do?timestamp={timestamp}&studentCode={student_code}&electiveBatchCode={batch_code}"
+
     def get_course_url(self, course_type: str, token: str) -> str:
         """Get appropriate course query URL based on type.
 

@@ -109,32 +109,60 @@ class CourseSelector:
                     self._wait_random()
                     continue
 
-                target = self._api.find_course_by_teacher(courses, course.teacher)
+                # Find all time slots for this teacher
+                targets = self._api.find_courses_by_teacher(courses, course.teacher)
 
-                if not target:
+                if not targets:
                     logger.debug("[%s] Teacher not found: %s", course.name, course.teacher)
                     self._wait_random()
                     continue
 
-                if target.has_spots:
-                    msg = f"Found spot! {course.name}-{course.teacher} remaining: {target.remaining}"
-                    logger.info(msg)
-                    self._notifier.send("Course Alert", msg)
-
-                    result = self._api.select_course(target, course_type)
-
-                    if result.success:
-                        success_msg = f"Selection successful: {course.name}"
-                        logger.info(success_msg)
-                        self._notifier.send("Selection Success", success_msg)
-                        return True
-                else:
+                # Try each available time slot
+                available_slots = [t for t in targets if t.has_spots]
+                
+                if available_slots:
                     logger.info(
-                        "[%s] %s full (%d/%d) %s",
+                        "Found %d available slot(s) for [%s] %s",
+                        len(available_slots),
                         course.name,
                         course.teacher,
-                        target.selected_count,
-                        target.capacity,
+                    )
+                    
+                    for slot in available_slots:
+                        msg = f"Found spot! {course.name}-{course.teacher} remaining: {slot.remaining}"
+                        logger.info(msg)
+                        self._notifier.send("Course Alert", msg)
+
+                        result = self._api.select_course(slot, course_type)
+
+                        if result.success:
+                            success_msg = f"Selection successful: {course.name}"
+                            logger.info(success_msg)
+                            self._notifier.send("Selection Success", success_msg)
+                            return True
+                        
+                        # Handle common failure cases and continue to next slot
+                        if "时间冲突" in result.message or "该课程与已选课程时间冲突" in result.message:
+                            logger.info("[%s] Time conflict, trying next slot", course.name)
+                            continue
+                        
+                        if "人数已满" in result.message or "已满" in result.message:
+                            logger.debug("[%s] Slot full, trying next slot", course.name)
+                            continue
+                        
+                        # For other errors, log and continue
+                        logger.warning("[%s] Selection failed: %s", course.name, result.message)
+                else:
+                    # Log once for all full slots
+                    total_capacity = sum(t.capacity for t in targets)
+                    total_selected = sum(t.selected_count for t in targets)
+                    logger.info(
+                        "[%s] %s full (%d/%d) across %d slot(s) %s",
+                        course.name,
+                        course.teacher,
+                        total_selected,
+                        total_capacity,
+                        len(targets),
                         time.strftime("%H:%M:%S"),
                     )
 

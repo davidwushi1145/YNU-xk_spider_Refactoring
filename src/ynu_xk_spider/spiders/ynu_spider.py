@@ -116,7 +116,7 @@ class YnuCourseSpider(BaseSpider):
             selector: Course selector instance.
 
         Returns:
-            True if all tasks completed, False if session expired.
+            True if all tasks completed successfully, False if session expired.
         """
         courses = self._settings.courses.all_courses
 
@@ -126,6 +126,8 @@ class YnuCourseSpider(BaseSpider):
 
         futures: list[Future] = []
         batch_stop_event = threading.Event()
+        success_count = 0
+        total_courses = len(courses)
 
         def should_stop() -> bool:
             return self.is_stopped() or batch_stop_event.is_set()
@@ -149,6 +151,17 @@ class YnuCourseSpider(BaseSpider):
                         logger.info("Thread signaled session expired")
                         batch_stop_event.set()
                         return False
+                    elif result is True:
+                        success_count += 1
+                        logger.info("Course selection successful (%d/%d)", success_count, total_courses)
+                        
+                        # Check if all courses are completed
+                        if success_count >= total_courses:
+                            logger.info("All %d courses selected successfully, stopping spider", total_courses)
+                            self.stop()
+                            return True
+                        else:
+                            logger.info("Continue monitoring remaining %d courses", total_courses - success_count)
                 except Exception as exc:
                     logger.error("Thread error: %s", exc)
 

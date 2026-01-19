@@ -145,6 +145,22 @@ class CourseApiClient:
                 return course
         return None
 
+    def find_courses_by_teacher(
+        self,
+        courses: list[CourseInfo],
+        teacher_name: str,
+    ) -> list[CourseInfo]:
+        """Find all courses by teacher name (multiple time slots).
+
+        Args:
+            courses: List of courses to search.
+            teacher_name: Teacher name to match.
+
+        Returns:
+            List of all matching courses.
+        """
+        return [course for course in courses if teacher_name in course.teacher_name]
+
     def select_course(
         self,
         course: CourseInfo,
