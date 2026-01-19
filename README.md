@@ -16,15 +16,15 @@
 
 ## 架构升级
 
-| 特性 | 描述 |
-|------|------|
-| **现代项目结构** | 采用 `/src` 布局，模块职责清晰分离 |
-| **Pydantic 配置** | 类型安全的配置验证，支持环境变量覆盖 |
+| 特性               | 描述                                                   |
+| ------------------ | ------------------------------------------------------ |
+| **现代项目结构**   | 采用 `/src` 布局，模块职责清晰分离                     |
+| **Pydantic 配置**  | 类型安全的配置验证，支持环境变量覆盖                   |
 | **单例浏览器管理** | `BrowserManager` 线程安全单例，统一 WebDriver 生命周期 |
-| **重试机制** | 指数退避 + 随机抖动的网络重试装饰器 |
-| **优雅停机** | 信号处理 + `threading.Event` 实现无损退出 |
-| **自定义异常** | 完整的异常层次结构，精准定位问题 |
-| **完整类型注解** | 100% Type Hints + Google Style Docstrings |
+| **重试机制**       | 指数退避 + 随机抖动的网络重试装饰器                    |
+| **优雅停机**       | 信号处理 + `threading.Event` 实现无损退出              |
+| **自定义异常**     | 完整的异常层次结构，精准定位问题                       |
+| **完整类型注解**   | 100% Type Hints + Google Style Docstrings              |
 
 ---
 
@@ -42,7 +42,7 @@
 
 ## 项目结构
 
-```
+```bash
 src/ynu_xk_spider/
 ├── __init__.py
 ├── app.py                 # 应用入口与信号处理
@@ -72,10 +72,10 @@ src/ynu_xk_spider/
 
 ## 环境要求
 
-| 依赖 | 版本要求 |
-|------|----------|
-| **Python** | 3.10+ |
-| **Chrome** | 最新稳定版 |
+| 依赖             | 版本要求           |
+| ---------------- | ------------------ |
+| **Python**       | 3.10+              |
+| **Chrome**       | 最新稳定版         |
 | **ChromeDriver** | 与 Chrome 版本匹配 |
 
 ---
@@ -157,20 +157,20 @@ cp config.sample.json config.json
 
 #### 配置说明
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `student_code` | string | 教务系统学号 |
-| `password` | string | 教务系统密码 |
-| `server_chan_key` | string | Server酱推送 Key，留空禁用 |
-| `chrome_driver_path` | string | ChromeDriver 路径，留空自动检测 |
-| `headless` | bool | 是否无头模式运行浏览器 |
-| `log_level` | string | 日志级别：DEBUG/INFO/WARNING/ERROR |
-| `poll_interval_min` | float | 最小轮询间隔（秒） |
-| `poll_interval_max` | float | 最大轮询间隔（秒） |
-| `campus` | string | 校区代码：`02`=呈贡校区，`01`=东陆校区 |
-| `courses.public` | array | 素选课列表 |
-| `courses.pe` | array | 体育课列表 |
-| `courses.program` | array | 主修课列表 |
+| 字段                 | 类型   | 说明                                   |
+| -------------------- | ------ | -------------------------------------- |
+| `student_code`       | string | 教务系统学号                           |
+| `password`           | string | 教务系统密码                           |
+| `server_chan_key`    | string | Server酱推送 Key，留空禁用             |
+| `chrome_driver_path` | string | ChromeDriver 路径，留空自动检测        |
+| `headless`           | bool   | 是否无头模式运行浏览器                 |
+| `log_level`          | string | 日志级别：DEBUG/INFO/WARNING/ERROR     |
+| `poll_interval_min`  | float  | 最小轮询间隔（秒）                     |
+| `poll_interval_max`  | float  | 最大轮询间隔（秒）                     |
+| `campus`             | string | 校区代码：`02`=呈贡校区，`01`=东陆校区 |
+| `courses.public`     | array  | 素选课列表                             |
+| `courses.pe`         | array  | 体育课列表                             |
+| `courses.program`    | array  | 主修课列表                             |
 
 #### 向后兼容
 
@@ -241,38 +241,119 @@ ynu-spider --log-level DEBUG
 
 ## 架构设计
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         app.py                              │
-│                    (Entry & Signal Handler)                 │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      YnuCourseSpider                        │
-│                   (Orchestration Layer)                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │LoginService │  │ HttpClient  │  │   CourseSelector    │  │
-│  │  (Selenium) │  │ (requests)  │  │ (Business Logic)    │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-          ┌───────────────────┼───────────────────┐
-          ▼                   ▼                   ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│ BrowserManager  │  │  CourseApiClient│  │   DdddocrSolver │
-│   (Singleton)   │  │   (API Layer)   │  │  (Captcha OCR)  │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+```mermaid
+ graph TD
+      %% Entry
+      App["app.py<br/>(Entry + Signals)"]
+      Settings["AppSettings<br/>(config.py)"]
+      ConfigJson["config.json"]
+      Logging["logging_config.py"]
+
+      App --> Settings
+      ConfigJson --> Settings
+      App --> Logging
+
+      %% Orchestration
+      subgraph Spider["YnuCourseSpider Orchestration"]
+          direction LR
+          YCS["YnuCourseSpider<br/>(spiders/ynu_spider.py)"]
+          Base["BaseSpider<br/>(spiders/base.py)"]
+      end
+      App --> YCS
+      YCS -. "inherits" .-> Base
+
+      %% Browser
+      subgraph Browser["Browser"]
+          direction LR
+          BM["BrowserManager<br/>(browser/manager.py)"]
+          OCR["DdddocrSolver<br/>(browser/captcha.py)"]
+          WD["Selenium WebDriver (Chrome)"]
+      end
+      BM --> WD
+
+      %% HTTP Layer
+      subgraph HTTP["HTTP Layer"]
+          direction LR
+          HC["HttpClient<br/>(http/client.py)"]
+          EP["Endpoints<br/>(http/endpoints.py)"]
+          Retry["retry<br/>(utils/retry.py)"]
+          Requests["requests.Session"]
+      end
+      HC --> Requests
+      HC --> Retry
+
+      %% Domain Services
+      subgraph Domain["Domain Services"]
+          direction LR
+          LoginSvc["LoginService<br/>(domain/services/login.py)"]
+          API["CourseApiClient<br/>(domain/services/course_api.py)"]
+          Selector["CourseSelector<br/>(domain/services/course_selector.py)"]
+          Notify["NotificationService<br/>(ServerChan)"]
+      end
+      Selector --> Notify
+
+      %% Models
+      subgraph Models["Domain Models (domain/models.py)"]
+          direction LR
+          Session["SessionData"]
+          CourseInfo["CourseInfo"]
+          SelReq["SelectionRequest"]
+          QueryReq["QueryRequest"]
+          SelRes["SelectionResult"]
+      end
+
+      %% Wiring
+      YCS --> BM
+      YCS --> HC
+      YCS --> LoginSvc
+      YCS --> Selector
+
+      LoginSvc --> BM
+      LoginSvc --> OCR
+      LoginSvc --> Session
+
+      YCS --> API
+      API --> EP
+      API --> HC
+      API --> CourseInfo
+      API --> SelReq
+      API --> QueryReq
+      API --> SelRes
+
+      Selector --> API
+      Selector --> HC
+      Selector --> CourseInfo
+      Selector --> SelRes
+
+      %% Auth flow
+      Session -. "token/cookies" .-> HC
+
+      %% Config usage
+      Settings -. "base_url/student_code/campus" .-> API
+      Settings -. "server_chan_key" .-> Notify
+      Settings -. "headless/chromedriver" .-> BM
+      Settings -. "poll_interval*" .-> Selector
+
+      %% Styles (node-level)
+      style App fill:#f9f,stroke:#333,stroke-width:2px
+      style YCS fill:#e1f5fe,stroke:#01579b,stroke-dasharray: 5 5
+      style HC fill:#fff3e0,stroke:#ef6c00
+      style BM fill:#ede7f6,stroke:#5e35b1
+      style OCR fill:#ede7f6,stroke:#5e35b1
+      style API fill:#e8f5e9,stroke:#2e7d32
+      style EP fill:#e8f5e9,stroke:#2e7d32
+      style Selector fill:#fffde7,stroke:#f9a825
+      style Notify fill:#fffde7,stroke:#f9a825
 ```
 
 ### 核心设计模式
 
-| 模式 | 应用 |
-|------|------|
-| **单例模式** | `BrowserManager` 统一管理 WebDriver 实例 |
-| **模板方法** | `BaseSpider` 定义生命周期钩子 |
-| **策略模式** | `CaptchaSolver` 抽象验证码识别实现 |
-| **装饰器模式** | `@retry` 为网络操作添加重试能力 |
+| 模式           | 应用                                     |
+| -------------- | ---------------------------------------- |
+| **单例模式**   | `BrowserManager` 统一管理 WebDriver 实例 |
+| **模板方法**   | `BaseSpider` 定义生命周期钩子            |
+| **策略模式**   | `CaptchaSolver` 抽象验证码识别实现       |
+| **装饰器模式** | `@retry` 为网络操作添加重试能力          |
 
 ---
 
