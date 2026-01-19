@@ -1,3 +1,4 @@
+import time
 """URL endpoint builders for YNU course selection API."""
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ class Endpoints:
         Returns:
             Fully qualified API URL.
         """
-        import time
+
         timestamp = int(time.time() * 1000)
         return f"{self._base}/xsxkapp/sys/xsxkapp/elective/courseResult.do?timestamp={timestamp}&studentCode={student_code}&electiveBatchCode={batch_code}"
 

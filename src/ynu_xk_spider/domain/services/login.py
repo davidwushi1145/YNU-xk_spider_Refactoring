@@ -199,6 +199,7 @@ class LoginService:
                     elif "认证失败" in err_ele.text or "密码" in err_ele.text:
                         return "auth_error"
             except NoSuchElementException:
+                # The error message element may legitimately be absent; treat as no error and retry.
                 pass
 
             try:

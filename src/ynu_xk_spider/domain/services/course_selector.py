@@ -152,6 +152,7 @@ class CourseSelector:
                         
                         # For other errors, log and continue
                         logger.warning("[%s] Selection failed: %s", course.name, result.message)
+                        break
                 else:
                     # Log once for all full slots
                     total_capacity = sum(t.capacity for t in targets)

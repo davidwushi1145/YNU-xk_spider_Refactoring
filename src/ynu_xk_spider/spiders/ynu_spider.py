@@ -154,7 +154,6 @@ class YnuCourseSpider(BaseSpider):
                     elif result is True:
                         success_count += 1
                         logger.info("Course selection successful (%d/%d)", success_count, total_courses)
-                        
                         # Check if all courses are completed
                         if success_count >= total_courses:
                             logger.info("All %d courses selected successfully, stopping spider", total_courses)

@@ -63,10 +63,14 @@ def main(config_path: Optional[Path] = None) -> int:
     try:
         settings = AppSettings.load(config_path)
 
+        updates = {}
         if args.headless:
-            settings.headless = True
+            updates["headless"] = True
         if args.log_level:
-            settings.log_level = args.log_level
+            updates["log_level"] = args.log_level
+        if updates:
+            copy_method = getattr(settings, "model_copy", None) or getattr(settings, "copy")
+            settings = copy_method(update=updates)
 
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)

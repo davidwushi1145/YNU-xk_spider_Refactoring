@@ -47,8 +47,8 @@ dev = [
 ynu-spider = "ynu_xk_spider.app:run"
 
 [project.urls]
-Homepage = "https://github.com/gaizhongtan/YNU-xk_spider"
-Repository = "https://github.com/gaizhongtan/YNU-xk_spider"
+Homepage = "https://github.com/davidwushi1145/YNU-xk_spider_Refactoring"
+Repository = "https://github.com/davidwushi1145/YNU-xk_spider_Refactoring"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ynu_xk_spider"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from logging.config import dictConfig
-from pathlib import Path
+
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:

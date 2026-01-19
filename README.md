@@ -387,8 +387,8 @@ pip install -e ".[dev]"
 mypy src/
 
 # 代码格式化
-black src/
-isort src/
+ruff format src/
+ruff check src/ --fix
 
 # 运行测试
 pytest
