@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SessionData(BaseModel):
@@ -39,8 +40,7 @@ class CourseInfo(BaseModel):
     capacity: int = Field(alias="classCapacity", default=0)
     selected_count: int = Field(alias="numberOfFirstVolunteer", default=0)
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
     @property
     def remaining(self) -> int:
@@ -77,7 +77,7 @@ class SelectionRequest(BaseModel):
             Dictionary with 'addParam' key containing serialized request data.
         """
         return {
-            "addParam": str(
+            "addParam": json.dumps(
                 {
                     "data": {
                         "operationType": "1",
@@ -88,7 +88,8 @@ class SelectionRequest(BaseModel):
                         "campus": self.campus,
                         "teachingClassType": self.class_type,
                     }
-                }
+                },
+                ensure_ascii=False,
             )
         }
 
@@ -117,7 +118,7 @@ class QueryRequest(BaseModel):
             Dictionary with 'querySetting' key containing serialized query data.
         """
         return {
-            "querySetting": str(
+            "querySetting": json.dumps(
                 {
                     "data": {
                         "studentCode": self.student_code,
@@ -132,7 +133,8 @@ class QueryRequest(BaseModel):
                     "pageSize": "10",
                     "pageNumber": "0",
                     "order": "",
-                }
+                },
+                ensure_ascii=False,
             )
         }
 

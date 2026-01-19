@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from ...exceptions import CourseSelectionError, NetworkError
+from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
 from ...http.endpoints import Endpoints
 from ..models import CourseInfo, QueryRequest, SelectionRequest, SelectionResult
 
@@ -200,6 +200,10 @@ class CourseApiClient:
                 teacher_name=course.teacher_name,
             )
 
+        except SessionExpiredError:
+            raise
+        except NetworkError:
+            raise
         except Exception as exc:
             logger.error("Selection failed: %s", exc)
             return SelectionResult(

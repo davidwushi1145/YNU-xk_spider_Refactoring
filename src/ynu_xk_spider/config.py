@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 
 class CourseItem(BaseModel):
@@ -119,6 +123,23 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Ensure env/.env override file/init settings."""
+        return (
+            env_settings,
+            dotenv_settings,
+            init_settings,
+            file_secret_settings,
+        )
+
     base_url: str = Field(
         default="https://xk.ynu.edu.cn/",
         description="Base URL of the course selection system",
@@ -206,6 +227,8 @@ class AppSettings(BaseSettings):
     def load(cls, config_file: Optional[Path] = None) -> "AppSettings":
         """Load settings from JSON file with env override.
 
+        Environment variables take precedence over file-based configuration.
+
         Args:
             config_file: Optional path to JSON config file.
                         Defaults to config.json in current directory.
@@ -226,13 +249,14 @@ class AppSettings(BaseSettings):
 
         try:
             with open(config_file, encoding="utf-8") as f:
-                data = json.load(f)
+                file_data = json.load(f)
 
             # Map legacy field names
-            if "chrome_driver_path" not in data and "chromedriver_path" in data:
-                data["chrome_driver_path"] = data.pop("chromedriver_path")
+            if "chrome_driver_path" not in file_data and "chromedriver_path" in file_data:
+                file_data["chrome_driver_path"] = file_data.pop("chromedriver_path")
 
-            return cls(**data)
+            # settings_customise_sources ensures env > dotenv > init (file_data)
+            return cls(**file_data)
         except json.JSONDecodeError as e:
             raise ConfigError(f"Invalid JSON in config file: {e}") from e
         except Exception as e:

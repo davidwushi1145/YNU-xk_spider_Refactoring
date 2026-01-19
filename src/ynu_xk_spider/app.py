@@ -81,7 +81,7 @@ def main(config_path: Optional[Path] = None) -> int:
     logger.info("=" * 60)
     logger.info("YNU Auto Course Selector (Refactored v2.0)")
     logger.info("=" * 60)
-    logger.info("Student: %s", settings.student_code)
+    logger.info("Student: %s****", settings.student_code[:4] if len(settings.student_code) > 4 else "****")
     logger.info("Headless: %s", settings.headless)
 
     courses = settings.courses.all_courses

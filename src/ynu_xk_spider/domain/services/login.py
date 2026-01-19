@@ -125,7 +125,7 @@ class LoginService:
                     time.sleep(2)
                     continue
 
-                logger.info("Attempt %d: captcha=%s", attempt + 1, captcha_code)
+                logger.debug("Attempt %d: captcha=%s", attempt + 1, captcha_code)
 
                 self._fill_login_form(driver, captcha_code)
 

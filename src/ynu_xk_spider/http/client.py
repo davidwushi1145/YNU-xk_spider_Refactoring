@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import requests
@@ -46,6 +47,7 @@ class HttpClient:
         self._settings = settings
         self._timeout = settings.http_timeout
         self._session = requests.Session()
+        self._session_lock = threading.Lock()
         self._token: Optional[str] = None
         self._setup_session()
 
@@ -113,7 +115,8 @@ class HttpClient:
         @self._create_retry_decorator()
         def _get() -> requests.Response:
             try:
-                resp = self._session.get(url, **kwargs)
+                with self._session_lock:
+                    resp = self._session.get(url, **kwargs)
                 self._check_session_expired(resp)
                 return resp
             except requests.RequestException as exc:
@@ -148,7 +151,8 @@ class HttpClient:
         @self._create_retry_decorator()
         def _post() -> requests.Response:
             try:
-                resp = self._session.post(url, data=data, json=json, **kwargs)
+                with self._session_lock:
+                    resp = self._session.post(url, data=data, json=json, **kwargs)
                 self._check_session_expired(resp)
                 return resp
             except requests.RequestException as exc:
@@ -164,12 +168,18 @@ class HttpClient:
 
         Raises:
             SessionExpiredError: If session has expired.
+            NetworkError: If response status indicates an error.
         """
         if resp.status_code == 401:
             raise SessionExpiredError("HTTP 401 - Session expired")
 
         if "未查询到登录信息" in resp.text:
             raise SessionExpiredError("Session expired - login info not found")
+
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            raise NetworkError(f"HTTP {resp.status_code}: {exc}") from exc
 
     def close(self) -> None:
         """Close the session."""
