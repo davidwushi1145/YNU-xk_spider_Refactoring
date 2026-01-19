@@ -1,0 +1,20 @@
+{
+  "student_code": "你的系统学号",
+  "password": "你的系统密码",
+  "server_chan_key": "",
+  "chrome_driver_path": "",
+  "headless": false,
+  "log_level": "INFO",
+  "poll_interval_min": 30.0,
+  "poll_interval_max": 60.0,
+  "campus": "02",
+  "courses": {
+    "public": [
+      {"name": "课程名称", "teacher": "授课老师"}
+    ],
+    "pe": [
+    ],
+    "program": [
+    ]
+  }
+}

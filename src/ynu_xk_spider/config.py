@@ -1,0 +1,239 @@
+"""Pydantic-based configuration with environment variable override support.
+
+Configuration can be loaded from:
+1. Environment variables (prefix: YNU_XK_)
+2. .env file
+3. JSON config file (config.json)
+
+Environment variables take precedence over file-based configuration.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class CourseItem(BaseModel):
+    """Single course target configuration."""
+
+    name: str = Field(..., min_length=1, description="Course name to search")
+    teacher: str = Field(..., min_length=1, description="Teacher name to match")
+
+    @classmethod
+    def from_list(cls, data: list[str]) -> "CourseItem":
+        """Create from legacy [name, teacher] list format.
+
+        Args:
+            data: Two-item list [name, teacher].
+
+        Returns:
+            CourseItem instance.
+
+        Raises:
+            ValueError: If the list contains fewer than two items.
+        """
+        if len(data) >= 2:
+            return cls(name=data[0], teacher=data[1])
+        raise ValueError(f"Invalid course format: {data}")
+
+
+class CoursesConfig(BaseModel):
+    """Course targets grouped by category."""
+
+    public: list[CourseItem] = Field(default_factory=list, description="素选课")
+    program: list[CourseItem] = Field(default_factory=list, description="主修课")
+    pe: list[CourseItem] = Field(default_factory=list, description="体育课")
+
+    @field_validator("public", "program", "pe", mode="before")
+    @classmethod
+    def _convert_legacy_format(cls, v: Any) -> list[CourseItem]:
+        """Convert legacy config entries to CourseItem list.
+
+        Args:
+            v: Items from config; supports dict entries or [name, teacher] pairs.
+
+        Returns:
+            Normalized list of CourseItem objects.
+        """
+        if not v:
+            return []
+        result = []
+        for item in v:
+            if isinstance(item, dict):
+                result.append(CourseItem(**item))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                result.append(CourseItem(name=item[0], teacher=item[1]))
+            elif isinstance(item, CourseItem):
+                result.append(item)
+        return result
+
+    @property
+    def all_courses(self) -> list[tuple[CourseItem, str]]:
+        """Return all courses with their category.
+
+        Returns:
+            List of tuples (CourseItem, category_label).
+        """
+        result: list[tuple[CourseItem, str]] = []
+        for course in self.public:
+            result.append((course, "素选"))
+        for course in self.program:
+            result.append((course, "主修"))
+        for course in self.pe:
+            result.append((course, "体育"))
+        return result
+
+
+class AppSettings(BaseSettings):
+    """Application settings with env override and JSON file support.
+
+    Attributes:
+        base_url: Base URL of the YNU course selection system.
+        student_code: Student ID for authentication.
+        password: Account password (stored securely).
+        chrome_driver_path: Optional path to chromedriver executable.
+        server_chan_key: Optional ServerChan key for WeChat notifications.
+        courses: Course selection targets.
+        headless: Run browser in headless mode.
+        log_level: Logging verbosity level.
+        log_file: Path for rotating log file output.
+        http_timeout: Default HTTP request timeout in seconds.
+        max_retries: Maximum retry attempts for network operations.
+        retry_backoff: Initial backoff delay in seconds.
+        retry_factor: Exponential backoff multiplier.
+        poll_interval_min: Minimum polling interval in seconds.
+        poll_interval_max: Maximum polling interval in seconds.
+        campus: Campus code (02=呈贡校区, 01=东陆校区).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="YNU_XK_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    base_url: str = Field(
+        default="https://xk.ynu.edu.cn/",
+        description="Base URL of the course selection system",
+    )
+    student_code: str = Field(..., min_length=1, description="Student ID")
+    password: SecretStr = Field(..., description="Account password")
+    chrome_driver_path: Optional[Path] = Field(
+        default=None, description="Path to chromedriver"
+    )
+    server_chan_key: Optional[str] = Field(
+        default=None, description="ServerChan notification key"
+    )
+    courses: CoursesConfig = Field(
+        default_factory=CoursesConfig, description="Target courses"
+    )
+
+    headless: bool = Field(default=False, description="Run browser headless")
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO", description="Logging level"
+    )
+    log_file: Path = Field(
+        default=Path("logs/spider.log"), description="Log file path"
+    )
+
+    http_timeout: float = Field(default=10.0, gt=0, description="HTTP timeout seconds")
+    max_retries: int = Field(default=5, ge=1, description="Max retry attempts")
+    retry_backoff: float = Field(default=0.5, gt=0, description="Initial backoff")
+    retry_factor: float = Field(default=2.0, ge=1, description="Backoff multiplier")
+
+    poll_interval_min: float = Field(default=3.0, gt=0, description="Min poll interval")
+    poll_interval_max: float = Field(default=6.0, gt=0, description="Max poll interval")
+
+    campus: str = Field(
+        default="02",
+        description="Campus code: 02=呈贡校区, 01=东陆校区",
+    )
+
+    @field_validator("log_file", mode="before")
+    @classmethod
+    def _expand_log_file(cls, v: Path | str) -> Path:
+        """Expand user home and resolve to absolute path.
+
+        Args:
+            v: Input path value.
+
+        Returns:
+            Absolute Path with user home expanded.
+        """
+        return Path(v).expanduser().resolve()
+
+    @field_validator("chrome_driver_path", mode="before")
+    @classmethod
+    def _normalize_chromedriver(cls, v: Path | str | None) -> Optional[Path]:
+        """Normalize chromedriver path value.
+
+        Treats empty strings as None to avoid invalid Service paths.
+
+        Args:
+            v: Raw value from config or environment.
+
+        Returns:
+            Normalized Path or None.
+        """
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return Path(v)
+
+    @model_validator(mode="after")
+    def _validate_poll_interval(self) -> "AppSettings":
+        """Ensure min <= max for poll interval.
+
+        Returns:
+            Self with normalized poll interval bounds.
+        """
+        if self.poll_interval_min > self.poll_interval_max:
+            self.poll_interval_min, self.poll_interval_max = (
+                self.poll_interval_max,
+                self.poll_interval_min,
+            )
+        return self
+
+    @classmethod
+    def load(cls, config_file: Optional[Path] = None) -> "AppSettings":
+        """Load settings from JSON file with env override.
+
+        Args:
+            config_file: Optional path to JSON config file.
+                        Defaults to config.json in current directory.
+
+        Returns:
+            Validated AppSettings instance.
+
+        Raises:
+            ConfigError: If configuration is invalid or file not found.
+        """
+        from .exceptions import ConfigError
+
+        if config_file is None:
+            config_file = Path("config.json")
+
+        if not config_file.exists():
+            raise ConfigError(f"Config file not found: {config_file}")
+
+        try:
+            with open(config_file, encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Map legacy field names
+            if "chrome_driver_path" not in data and "chromedriver_path" in data:
+                data["chrome_driver_path"] = data.pop("chromedriver_path")
+
+            return cls(**data)
+        except json.JSONDecodeError as e:
+            raise ConfigError(f"Invalid JSON in config file: {e}") from e
+        except Exception as e:
+            raise ConfigError(f"Failed to load config: {e}") from e

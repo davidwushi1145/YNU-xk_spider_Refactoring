@@ -1,133 +1,326 @@
-# YNU-xk_spider
+# YNU-xk_spider（重构版 v2.0）
 
 > [!CAUTION]
-> **Disclaimer / 声明**
 >
-> This program is for technical exchange ONLY. Commercial use or charging fees is strictly prohibited. We reserve the right to discontinue all future maintenance if any unauthorized commercial activity is detected.
+> Disclaimer / 声明
 >
-> 本程序仅供技术交流。严禁任何形式的收费行为。若再次发现违规收费，我们将停止后续一切维护。
+> 本程序仅供技术交流学习使用，严禁任何形式的商业用途或收费行为。若发现违规收费，我们将立即停止后续一切维护。
+>
+> This program is for technical exchange ONLY. Commercial use or charging fees is strictly prohibited.
 
-云南大学选课爬虫，提供余课提醒服务，实现自动抢课功能。
+**云南大学选课爬虫，提供余课提醒服务，实现自动抢课功能。**
 
-> [重构版](https://github.com/davidwushi1145/YNU-xk_spider_Refactoring) - 若存在 bug 请到此版本提出 issue
+此版本为**架构重构版**，采用现代 Python 工程实践完全重写，具备清晰的模块分层、完整的类型注解和企业级代码规范。
 
-## 更新日志
+---
 
-| 日期         | 更新内容 |
-|------------|----------|
-| 2026-01-18 |1. 登录策略重写：针对教务系统响应迟缓问题，新增**“慢速连点模式”**。每步输入强制暂停 1s，登录按钮执行 5 次连点尝试，确保请求送达。2. 验证码熔断机制：输入验证码后若识别错误，立即中断后续点击，自动刷新验证码并重试，避免无效操作。3. 架构轻量化：移除 api.py (Flask) 本地服务，将 ddddocr 识别库直接集成至主进程，无需单独启动 OCR 服务端。4. 网络层升级：全面启用 requests.Session，自动管理 Cookie 并开启 Keep-Alive 长连接，提升抢课并发性能。5. 安全性升级：引入 config.json 配置文件，实现账号密码与核心代码分离。|
-| 2026-01-14 | 线程安全重构：添加锁保护共享资源；优雅停止机制（stop() + _running）；移除死代码；Selenium 4.x Service 类适配；ThreadPoolExecutor 正确关闭；API 输入验证增强 |
-| 2024-12-25 | 修复体育课问题及东陆校区问题 |
-| 2024-06-26 | 修复完成 |
-| 2024-03-08 | 修复已知的所有 bug |
-| 2023-12-30 | 经测试 24 小时无异常 |
-| 2023-12-28 | 解决 API 接口问题，多系统测试无异常 |
-| 2023-06-23 | 解决自动注销问题，测试 3 小时无注销 |
+## 架构升级
+
+| 特性 | 描述 |
+|------|------|
+| **现代项目结构** | 采用 `/src` 布局，模块职责清晰分离 |
+| **Pydantic 配置** | 类型安全的配置验证，支持环境变量覆盖 |
+| **单例浏览器管理** | `BrowserManager` 线程安全单例，统一 WebDriver 生命周期 |
+| **重试机制** | 指数退避 + 随机抖动的网络重试装饰器 |
+| **优雅停机** | 信号处理 + `threading.Event` 实现无损退出 |
+| **自定义异常** | 完整的异常层次结构，精准定位问题 |
+| **完整类型注解** | 100% Type Hints + Google Style Docstrings |
+
+---
 
 ## 功能特性
 
-- 极速识别：内置 ddddocr 识别模型，毫秒级识别验证码，无需本地 API 服务。
-- 智能登录：支持慢速连点与错误重试机制，应对教务系统卡顿
-- 实时监控：自动刷新课程余量。
-- 微信提醒：支持 Server酱推送抢课结果。
-- 全自动抢课：检测到空位立即提交选课请求。
-- 多课程支持：素选课、主修课（必修/专选）、体育课。
-- 多校区支持：呈贡校区（默认）、东陆校区。
+- **极速识别**：内置 `ddddocr` 模型，毫秒级本地识别验证码
+- **智能登录**：慢速连点 + 验证码熔断机制，从容应对系统卡顿
+- **实时监控**：自动刷新课程余量，检测到空位立即提交
+- **多课程支持**：覆盖素选课、主修课（必修/专选）、体育课
+- **并发抢课**：线程池并行监控多门课程
+- **会话保活**：自动检测过期并重新登录
+- **微信提醒**：集成 Server酱推送，结果即时送达
+
+---
+
+## 项目结构
+
+```
+src/ynu_xk_spider/
+├── __init__.py
+├── app.py                 # 应用入口与信号处理
+├── config.py              # Pydantic 配置模型
+├── exceptions.py          # 自定义异常层次
+├── logging_config.py      # 日志配置
+├── utils/
+│   └── retry.py           # 重试装饰器
+├── browser/
+│   ├── manager.py         # BrowserManager 单例
+│   └── captcha.py         # 验证码识别抽象
+├── http/
+│   ├── client.py          # HTTP 客户端封装
+│   └── endpoints.py       # API 端点构建器
+├── domain/
+│   ├── models.py          # 领域模型
+│   └── services/
+│       ├── login.py       # 登录服务
+│       ├── course_api.py  # 课程 API 客户端
+│       └── course_selector.py  # 选课业务逻辑
+└── spiders/
+    ├── base.py            # BaseSpider 抽象基类
+    └── ynu_spider.py      # YNU 选课爬虫实现
+```
+
+---
 
 ## 环境要求
 
 | 依赖 | 版本要求 |
 |------|----------|
-| Python | 3.10+ |
-| Chrome 浏览器 | 最新版本 |
-| ChromeDriver | 与 Chrome 版本匹配 |
+| **Python** | 3.10+ |
+| **Chrome** | 最新稳定版 |
+| **ChromeDriver** | 与 Chrome 版本匹配 |
 
-**Python 依赖库**：
-```
-selenium>=4.0.0
-requests
-ddddocr
-```
+---
 
-## 快速开始
+## 📖 快速开始
 
-### 1. 安装依赖
+### 1. 安装
 
 ```bash
-cd YNU-xk_spider
+git clone https://github.com/gaizhongtan/YNU-xk_spider_Refactoring.git
+cd YNU-xk_spider_Refactoring
+
+# 方式一：pip 安装（推荐）
+pip install -e .
+
+# 方式二：仅安装依赖
 pip install -r requirements.txt
 ```
 
 ### 2. 下载 ChromeDriver
 
-下载与你的 Chrome 版本匹配的 ChromeDriver：https://googlechromelabs.github.io/chrome-for-testing/
-本版本zip压缩包自带 chromedriver.exe 143。版本不对下载其他版即可
+前往 [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 下载与浏览器版本匹配的驱动。
+
+> Selenium 4.x 支持自动下载驱动，通常无需手动配置。
 
 ### 3. 配置
 
-在项目根目录下修改 config.json 文件（注意：不再直接修改代码）。
+复制示例配置并修改：
 
-根据实际情况修改：
-pe为体育课，public为素选课，program为主修课，选修课等。
+```bash
+cp config.sample.json config.json
+```
+
+编辑 `config.json`：
 
 ```json
 {
-  "student_code": "你的教务系统学号",
-  "password": "你的教务系统密码",
+  "student_code": "你的系统学号",
+  "password": "你的系统密码",
   "server_chan_key": "",
-  "chromedriver_path": "C:\\path\\to\\chromedriver.exe",
+  "chrome_driver_path": "",
+  "headless": false,
+  "log_level": "INFO",
+  "poll_interval_min": 3.0,
+  "poll_interval_max": 6.0,
+  "campus": "02",
   "courses": {
     "public": [
-        ["数据之美——数据可视化应用", "朱艳萍"]
+      {"name": "课程名称", "teacher": "授课老师"}
     ],
-    "pe": [],
-    "program": []
+    "pe": [
+    ],
+    "program": [
+    ]
   }
 }
 ```
-[!TIP] 配置说明：
 
-server_chan_key: 留空 "" 则不发送微信通知。
+#### 课程配置示例
 
-chromedriver_path: Windows系统路径分隔符需使用双斜杠 \\。
+```json
+{
+  "courses": {
+    "public": [
+      {"name": "数据之美——数据可视化应用", "teacher": "朱一"},
+      {"name": "人工智能导论", "teacher": "张二"}
+    ],
+    "pe": [
+      {"name": "羽毛球（四）", "teacher": "范三"}
+    ],
+    "program": [
+      {"name": "大学生创新创业教育", "teacher": "段四"}
+    ]
+  }
+}
+```
 
-课程格式非常重要：必须是二维数组 [ ["课程名", "老师名"] ]。如果不抢某类课，请填空数组 []。
-### 4. 运行程序
+> 不抢某类课程时，保持空数组 `[]` 即可。
+
+#### 配置说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `student_code` | string | 教务系统学号 |
+| `password` | string | 教务系统密码 |
+| `server_chan_key` | string | Server酱推送 Key，留空禁用 |
+| `chrome_driver_path` | string | ChromeDriver 路径，留空自动检测 |
+| `headless` | bool | 是否无头模式运行浏览器 |
+| `log_level` | string | 日志级别：DEBUG/INFO/WARNING/ERROR |
+| `poll_interval_min` | float | 最小轮询间隔（秒） |
+| `poll_interval_max` | float | 最大轮询间隔（秒） |
+| `campus` | string | 校区代码：`02`=呈贡校区，`01`=东陆校区 |
+| `courses.public` | array | 素选课列表 |
+| `courses.pe` | array | 体育课列表 |
+| `courses.program` | array | 主修课列表 |
+
+#### 向后兼容
+
+同时支持旧版数组格式：
+
+```json
+["课程名称", "授课老师"]
+```
+
+#### 环境变量覆盖
+
+所有配置项支持环境变量覆盖，前缀为 `YNU_XK_`：
 
 ```bash
-python xk_spider/run.py
+export YNU_XK_STUDENT_CODE="20xxxxxxxx"
+export YNU_XK_PASSWORD="your_password"
+export YNU_XK_HEADLESS="true"
 ```
-为了便于调试，开发者禁用了无头模式来观察浏览器操作过程。如果需要无头模式，请自行修改 AutoLogin.py 文件第25行。
-## 校区配置
 
-如需选择东陆校区的课程，请手动修改 xk_spider/GetCourse.py 文件。
+### 4. 运行
 
-搜索 judge_loop 和 post_add 方法中的 campus 参数：
+```bash
+# 方式一：模块运行
+python -m ynu_xk_spider
 
-| 校区 | campus 值 |
-|------|----------|
-| 呈贡校区（默认） | `"02"`   |
-| 东陆校区 | `"01"`   |
+# 方式二：CLI 命令（需 pip install -e .）
+ynu-spider
 
-## 常见问题
+# 指定配置文件
+ynu-spider -c /path/to/config.json
 
-**Q: 出现 401 错误或 Token 失效怎么办？**
-A: 新版程序内置了 Session 自动保活和断线重连机制，通常会自动重新登录。如果频繁出现，请检查网络连接。
+# 启用无头模式
+ynu-spider --headless
 
-**Q: 为什么登录时会停顿？ **
-A: 为防止教务系统因请求过快而丢包，最新版本特意增加了每步操作 1 秒的强制等待，属于正常现象。
+# 调整日志级别
+ynu-spider --log-level DEBUG
+```
 
-**Q: 验证码一直错误？ **
-A: 程序会自动刷新重试。如果连续错误超过 10 次，请检查是否被教务系统暂时封禁 IP。
-## 致谢
+### 5. 停止
 
-- 原项目：https://github.com/starwingChen/YNU-xk_spider
-- Server酱：https://sct.ftqq.com/
-
-## 声明
-
-**此程序仅作为技术交流之用，请勿将其用于任何形式的收费行为。**
+按 `Ctrl+C` 优雅停机，程序会等待当前操作完成后退出。
 
 ---
 
-如果本项目对你有帮助，欢迎点击右上角的 Star 支持一下 :)
+## ⚙️ 高级配置
+
+### HTTP 参数
+
+可在配置中调整网络行为：
+
+```json
+{
+  "http_timeout": 10.0,
+  "max_retries": 5,
+  "retry_backoff": 0.5,
+  "retry_factor": 2.0
+}
+```
+
+### 日志输出
+
+日志同时输出到控制台和文件：
+
+- 控制台：彩色格式化输出
+- 文件：`logs/spider.log`（自动轮转，单文件 5MB，保留 3 份）
+
+---
+
+## 架构设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         app.py                              │
+│                    (Entry & Signal Handler)                 │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      YnuCourseSpider                        │
+│                   (Orchestration Layer)                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │LoginService │  │ HttpClient  │  │   CourseSelector    │  │
+│  │  (Selenium) │  │ (requests)  │  │ (Business Logic)    │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ BrowserManager  │  │  CourseApiClient│  │   DdddocrSolver │
+│   (Singleton)   │  │   (API Layer)   │  │  (Captcha OCR)  │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+### 核心设计模式
+
+| 模式 | 应用 |
+|------|------|
+| **单例模式** | `BrowserManager` 统一管理 WebDriver 实例 |
+| **模板方法** | `BaseSpider` 定义生命周期钩子 |
+| **策略模式** | `CaptchaSolver` 抽象验证码识别实现 |
+| **装饰器模式** | `@retry` 为网络操作添加重试能力 |
+
+---
+
+## 常见问题
+
+**Q: 为什么不需要运行 api.py 了？**
+
+A: v2.0 将 `ddddocr` 直接集成到主进程，无需额外启动 Flask 服务。
+
+**Q: 出现 401 错误或 Token 失效？**
+
+A: 程序内置会话自动保活机制，检测到过期会自动重新登录。若频繁出现请检查网络。
+
+**Q: 验证码一直识别错误？**
+
+A: `ddddocr` 存在一定误报率，程序会自动刷新重试（最多 10 次）。
+
+**Q: 如何切换校区？**
+
+A: 在 `config.json` 中修改 `campus` 字段：`"02"` 为呈贡校区（默认），`"01"` 为东陆校区。
+
+---
+
+## 开发
+
+```bash
+# 安装开发依赖
+pip install -e ".[dev]"
+
+# 类型检查
+mypy src/
+
+# 代码格式化
+black src/
+isort src/
+
+# 运行测试
+pytest
+```
+
+---
+
+## 致谢
+
+- 原项目：[starwingChen/YNU-xk_spider](https://github.com/starwingChen/YNU-xk_spider)
+- 验证码识别：[ddddocr](https://github.com/sml2h3/ddddocr)
+- 推送服务：[Server酱](https://sct.ftqq.com/)
+
+---
+
+**如果本项目对你有帮助，欢迎点击右上角的 Star ⭐ 支持一下！**
