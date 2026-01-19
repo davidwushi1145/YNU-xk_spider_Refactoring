@@ -1,2 +1,6 @@
-xk_spider/config.json
-idea/
+logs/
+.idea/
+.ace-tool/
+.claude/
+config.json
+**/__pycache__/

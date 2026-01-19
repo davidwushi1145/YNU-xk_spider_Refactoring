@@ -1,0 +1,82 @@
+"""Retry decorator with exponential backoff and jitter."""
+
+from __future__ import annotations
+
+import functools
+import logging
+import random
+import time
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def retry(
+    exceptions: tuple[type[BaseException], ...],
+    tries: int = 5,
+    delay: float = 0.5,
+    backoff: float = 2.0,
+    jitter: float = 0.1,
+    logger: logging.Logger | None = None,
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    """Retry decorator with exponential backoff and jitter.
+
+    Args:
+        exceptions: Exception types to catch and retry on.
+        tries: Total number of attempts (>= 1).
+        delay: Initial delay between retries in seconds.
+        backoff: Multiplier applied to delay after each failure.
+        jitter: Random jitter range (+/-) added to delay.
+        logger: Optional logger for warning messages.
+
+    Returns:
+        Decorated function with retry behavior.
+
+    Example:
+        @retry(exceptions=(NetworkError,), tries=3, delay=1.0)
+        def fetch_data() -> dict:
+            ...
+
+    Raises:
+        ValueError: If parameters are invalid.
+    """
+    if tries < 1:
+        raise ValueError("tries must be >= 1")
+    if delay <= 0:
+        raise ValueError("delay must be > 0")
+    if backoff < 1:
+        raise ValueError("backoff must be >= 1")
+    if jitter < 0:
+        raise ValueError("jitter must be >= 0")
+    if not exceptions:
+        raise ValueError("exceptions must not be empty")
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        @functools.wraps(func)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+            remaining = tries
+            current_delay = delay
+
+            while remaining > 1:
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as exc:
+                    wait = max(0.0, current_delay + random.uniform(-jitter, jitter))
+                    if logger:
+                        logger.warning(
+                            "Retryable error in %s: %s. Retrying in %.2fs (%d attempts left)",
+                            func.__name__,
+                            exc,
+                            wait,
+                            remaining - 1,
+                        )
+                    time.sleep(wait)
+                    remaining -= 1
+                    current_delay *= backoff
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
