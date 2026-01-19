@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
+from ...exceptions import NetworkError, SessionExpiredError
 from ...http.endpoints import Endpoints
 from ..models import CourseInfo, QueryRequest, SelectionRequest, SelectionResult
 

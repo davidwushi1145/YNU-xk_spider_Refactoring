@@ -217,9 +217,11 @@ class AppSettings(BaseSettings):
             Self with normalized poll interval bounds.
         """
         if self.poll_interval_min > self.poll_interval_max:
-            self.poll_interval_min, self.poll_interval_max = (
-                self.poll_interval_max,
-                self.poll_interval_min,
+            return self.model_copy(
+                update={
+                    "poll_interval_min": self.poll_interval_max,
+                    "poll_interval_max": self.poll_interval_min,
+                }
             )
         return self
 
