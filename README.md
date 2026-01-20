@@ -119,8 +119,8 @@ cp config.sample.json config.json
   "chrome_driver_path": "",
   "headless": false,
   "log_level": "INFO",
-  "poll_interval_min": 3.0,
-  "poll_interval_max": 6.0,
+  "poll_interval_min": 30.0,
+  "poll_interval_max": 60.0,
   "campus": "02",
   "courses": {
     "public": [
@@ -159,8 +159,8 @@ cp config.sample.json config.json
 
 | 字段                 | 类型   | 说明                                   |
 | -------------------- | ------ | -------------------------------------- |
-| `student_code`       | string | 教务系统学号                           |
-| `password`           | string | 教务系统密码                           |
+| `student_code`       | string | 选课系统学号                           |
+| `password`           | string | 选课系统密码                           |
 | `server_chan_key`    | string | Server酱推送 Key，留空禁用             |
 | `chrome_driver_path` | string | ChromeDriver 路径，留空自动检测        |
 | `headless`           | bool   | 是否无头模式运行浏览器                 |
