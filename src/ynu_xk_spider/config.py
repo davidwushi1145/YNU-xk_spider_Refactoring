@@ -177,6 +177,17 @@ class AppSettings(BaseSettings):
         description="Campus code: 02=呈贡校区, 01=东陆校区",
     )
 
+    # Retry and concurrency settings
+    max_login_attempts: int = Field(
+        default=10, ge=1, description="Maximum login retry attempts"
+    )
+    max_workers: int = Field(
+        default=4, ge=1, description="Maximum concurrent course monitoring threads"
+    )
+    max_consecutive_failures: int = Field(
+        default=5, ge=1, description="Max consecutive failures before stopping"
+    )
+
     @field_validator("log_file", mode="before")
     @classmethod
     def _expand_log_file(cls, v: Path | str) -> Path:

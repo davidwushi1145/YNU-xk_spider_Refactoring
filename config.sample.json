@@ -8,13 +8,17 @@
   "poll_interval_min": 30.0,
   "poll_interval_max": 60.0,
   "campus": "02",
+  "max_login_attempts": 10,
+  "max_workers": 4,
+  "max_consecutive_failures": 5,
   "courses": {
     "public": [
-      {"name": "课程名称", "teacher": "授课老师"}
+      {
+        "name": "课程名称",
+        "teacher": "授课老师"
+      }
     ],
-    "pe": [
-    ],
-    "program": [
-    ]
+    "pe": [],
+    "program": []
   }
 }

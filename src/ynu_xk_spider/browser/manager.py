@@ -101,6 +101,18 @@ class BrowserManager:
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option("useAutomationExtension", False)
 
+            # Performance restrictions
+            options.add_argument("--disable-extensions")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--blink-settings=imagesEnabled=false")
+            options.add_experimental_option(
+                "prefs",
+                {
+                    "profile.managed_default_content_settings.images": 2,
+                    "profile.default_content_setting_values.notifications": 2,
+                },
+            )
+
             if self._settings.chrome_driver_path:
                 service = Service(executable_path=str(self._settings.chrome_driver_path))
                 driver = webdriver.Chrome(service=service, options=options)

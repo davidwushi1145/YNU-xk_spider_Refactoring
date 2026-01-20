@@ -41,7 +41,6 @@ class LoginService:
         _solver: Captcha solver instance.
     """
 
-    MAX_LOGIN_ATTEMPTS = 10
     MAX_CLICK_ATTEMPTS = 5
     INPUT_DELAY = 1.0
     CLICK_DELAY = 1.0
@@ -103,7 +102,8 @@ class LoginService:
         Returns:
             True if login succeeded.
         """
-        for attempt in range(self.MAX_LOGIN_ATTEMPTS):
+        max_attempts = self._settings.max_login_attempts
+        for attempt in range(max_attempts):
             try:
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.ID, "vcodeImg"))

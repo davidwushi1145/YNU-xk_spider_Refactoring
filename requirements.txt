@@ -1,3 +1,5 @@
-selenium>=4.1.0
-requests>=2.25.1
-ddddocr>=1.4.0
+selenium>=4.40.0
+ddddocr>=1.5.6
+requests>=2.32.5
+pydantic>=2.5.0
+pydantic-settings>=2.1.0

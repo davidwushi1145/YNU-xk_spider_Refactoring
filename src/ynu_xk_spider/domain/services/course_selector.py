@@ -98,7 +98,7 @@ class CourseSelector:
         logger.info("Starting monitor: [%s] - %s", course.name, course.teacher)
 
         fail_count = 0
-        max_consecutive_failures = 5
+        max_consecutive_failures = self._settings.max_consecutive_failures
 
         while not is_stopped():
             try:

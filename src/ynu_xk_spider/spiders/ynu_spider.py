@@ -40,18 +40,17 @@ class YnuCourseSpider(BaseSpider):
         _max_workers: Maximum concurrent monitoring threads.
     """
 
-    def __init__(self, settings: AppSettings, max_workers: int = 4) -> None:
+    def __init__(self, settings: AppSettings) -> None:
         """Initialize spider.
 
         Args:
             settings: Application settings.
-            max_workers: Maximum concurrent course monitors.
         """
         super().__init__()
         self._settings = settings
         self._browser = BrowserManager.instance(settings)
         self._http = HttpClient(settings)
-        self._max_workers = max_workers
+        self._max_workers = settings.max_workers
 
     def run_loop(self) -> None:
         """Main execution loop with auto-reconnect."""
