@@ -2,5 +2,6 @@ logs/
 .idea/
 .ace-tool/
 .claude/
+.selenium-cache/
 config.json
 **/__pycache__/
