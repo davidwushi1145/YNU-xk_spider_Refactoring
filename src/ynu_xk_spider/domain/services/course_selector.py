@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
-from typing import TYPE_CHECKING, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
 
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 class NotificationService:
     """Simple notification service via ServerChan."""
 
-    def __init__(self, server_key: Optional[str] = None) -> None:
+    def __init__(self, server_key: str | None = None) -> None:
         """Initialize notification service.
 
         Args:
@@ -46,6 +48,11 @@ class NotificationService:
         except Exception as exc:
             logger.warning("Notification failed: %s", exc)
 
+    @property
+    def enabled(self) -> bool:
+        """Whether notification sending is configured."""
+        return bool(self._server_key)
+
 
 class CourseSelector:
     """Business logic for course monitoring and selection.
@@ -66,7 +73,7 @@ class CourseSelector:
         self,
         api: CourseApiClient,
         settings: AppSettings,
-        notifier: Optional[NotificationService] = None,
+        notifier: NotificationService | None = None,
     ) -> None:
         """Initialize course selector.
 
@@ -78,6 +85,16 @@ class CourseSelector:
         self._api = api
         self._settings = settings
         self._notifier = notifier or NotificationService(settings.server_chan_key)
+
+    def _notify_async(self, title: str, content: str) -> None:
+        """Send notifications off the critical selection path."""
+        if not self._notifier.enabled:
+            return
+        threading.Thread(
+            target=self._notifier.send,
+            args=(title, content),
+            daemon=True,
+        ).start()
 
     def run_monitoring_loop(
         self,
@@ -119,7 +136,7 @@ class CourseSelector:
 
                 # Try each available time slot
                 available_slots = [t for t in targets if t.has_spots]
-                
+
                 if available_slots:
                     logger.info(
                         "Found %d available slot(s) for [%s] %s",
@@ -127,29 +144,29 @@ class CourseSelector:
                         course.name,
                         course.teacher,
                     )
-                    
+
                     for slot in available_slots:
                         msg = f"Found spot! {course.name}-{course.teacher} remaining: {slot.remaining}"
                         logger.info(msg)
-                        self._notifier.send("Course Alert", msg)
+                        self._notify_async("Course Alert", msg)
 
                         result = self._api.select_course(slot, course_type)
 
                         if result.success:
                             success_msg = f"Selection successful: {course.name}"
                             logger.info(success_msg)
-                            self._notifier.send("Selection Success", success_msg)
+                            self._notify_async("Selection Success", success_msg)
                             return True
-                        
+
                         # Handle common failure cases and continue to next slot
                         if "时间冲突" in result.message or "该课程与已选课程时间冲突" in result.message:
                             logger.info("[%s] Time conflict, trying next slot", course.name)
                             continue
-                        
+
                         if "人数已满" in result.message or "已满" in result.message:
                             logger.debug("[%s] Slot full, trying next slot", course.name)
                             continue
-                        
+
                         # For other errors, log and continue
                         logger.warning("[%s] Selection failed: %s", course.name, result.message)
                         break

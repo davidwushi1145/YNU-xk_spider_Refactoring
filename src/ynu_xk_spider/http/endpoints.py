@@ -1,7 +1,8 @@
-import time
 """URL endpoint builders for YNU course selection API."""
 
 from __future__ import annotations
+
+import time
 
 
 class Endpoints:

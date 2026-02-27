@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 from ..exceptions import CaptchaError
 
@@ -83,7 +83,7 @@ class DdddocrSolver(CaptchaSolver):
         self._beta = beta
         self._charset_range = charset_range
         self._png_fix = png_fix
-        self._ocr: Optional[Any] = None
+        self._ocr: Any | None = None
 
     def _get_ocr(self) -> Any:
         """Lazy initialize ddddocr instance with optimized settings."""
@@ -92,18 +92,23 @@ class DdddocrSolver(CaptchaSolver):
                 import ddddocr
 
                 self._ocr = ddddocr.DdddOcr(show_ad=self._show_ad, beta=self._beta)
-                
+
                 # Set character range for alphanumeric recognition
                 self._ocr.set_ranges(self._charset_range)
-                
+
                 logger.info(
                     "ddddocr initialized: beta=%s, charset_range=%d, png_fix=%s",
                     self._beta,
                     self._charset_range,
                     self._png_fix,
                 )
+            except ModuleNotFoundError as exc:
+                raise CaptchaError("ddddocr is not installed") from exc
             except ImportError as exc:
-                raise CaptchaError("ddddocr not installed") from exc
+                raise CaptchaError(
+                    "ddddocr import failed. Installed package may be incompatible "
+                    f"or broken: {exc}. Try reinstalling with `pip install \"ddddocr<1.6.0\"`."
+                ) from exc
             except Exception as exc:
                 raise CaptchaError(f"Failed to initialize ddddocr: {exc}") from exc
         return self._ocr
@@ -125,9 +130,9 @@ class DdddocrSolver(CaptchaSolver):
 
         try:
             ocr = self._get_ocr()
-            
+
             # Use png_fix for transparent background PNG images
-            result = ocr.classification(image_bytes, png_fix=self._png_fix)  # type: ignore
+            result = ocr.classification(image_bytes, png_fix=self._png_fix)
 
             if not result:
                 raise CaptchaError("OCR returned empty result")

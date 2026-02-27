@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 from ..exceptions import NetworkError, SessionExpiredError
 from ..utils.retry import retry
@@ -48,7 +49,7 @@ class HttpClient:
         self._timeout = settings.http_timeout
         self._session = requests.Session()
         self._session_lock = threading.Lock()
-        self._token: Optional[str] = None
+        self._token: str | None = None
         self._setup_session()
 
     def _setup_session(self) -> None:
@@ -81,7 +82,7 @@ class HttpClient:
         logger.debug("Auth configured with token: %s...", token[:8] if token else "N/A")
 
     @property
-    def token(self) -> Optional[str]:
+    def token(self) -> str | None:
         """Current authentication token."""
         return self._token
 
@@ -127,8 +128,8 @@ class HttpClient:
     def post(
         self,
         url: str,
-        data: Optional[dict[str, Any]] = None,
-        json: Optional[dict[str, Any]] = None,
+        data: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> requests.Response:
         """Send POST request with retry.

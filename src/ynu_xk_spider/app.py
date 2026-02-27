@@ -7,7 +7,6 @@ import signal
 import sys
 from pathlib import Path
 from types import FrameType
-from typing import Optional
 
 from .config import AppSettings
 from .exceptions import ConfigError, SpiderError
@@ -46,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main(config_path: Optional[Path] = None) -> int:
+def main(config_path: Path | None = None) -> int:
     """Main application entry point.
 
     Args:
@@ -69,7 +68,7 @@ def main(config_path: Optional[Path] = None) -> int:
         if args.log_level:
             updates["log_level"] = args.log_level
         if updates:
-            copy_method = getattr(settings, "model_copy", None) or getattr(settings, "copy")
+            copy_method = getattr(settings, "model_copy", None) or settings.copy
             settings = copy_method(update=updates)
 
     except ConfigError as exc:
@@ -95,7 +94,7 @@ def main(config_path: Optional[Path] = None) -> int:
 
     spider = YnuCourseSpider(settings)
 
-    def signal_handler(signum: int, frame: Optional[FrameType]) -> None:
+    def signal_handler(signum: int, frame: FrameType | None) -> None:
         logger.info("Received signal %d, stopping...", signum)
         spider.stop()
 

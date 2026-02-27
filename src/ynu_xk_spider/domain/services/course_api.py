@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from ...exceptions import NetworkError, SessionExpiredError
 from ...http.endpoints import Endpoints
 from ..models import CourseInfo, QueryRequest, SelectionRequest, SelectionResult
 
 if TYPE_CHECKING:
-    from ...config import CourseItem
     from ...http.client import HttpClient
 
 logger = logging.getLogger(__name__)
@@ -130,7 +129,7 @@ class CourseApiClient:
         self,
         courses: list[CourseInfo],
         teacher_name: str,
-    ) -> Optional[CourseInfo]:
+    ) -> CourseInfo | None:
         """Find a course by teacher name.
 
         Args:

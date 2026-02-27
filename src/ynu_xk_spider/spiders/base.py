@@ -65,6 +65,8 @@ class BaseSpider(ABC):
 
     def on_start(self) -> None:
         """Hook called before run_loop. Override for setup."""
+        return None
 
     def on_stop(self) -> None:
         """Hook called after run_loop. Override for cleanup."""
+        return None

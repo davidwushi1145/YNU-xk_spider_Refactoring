@@ -6,7 +6,8 @@ import functools
 import logging
 import random
 import time
-from typing import Callable, ParamSpec, TypeVar
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
 
 P = ParamSpec("P")
 T = TypeVar("T")

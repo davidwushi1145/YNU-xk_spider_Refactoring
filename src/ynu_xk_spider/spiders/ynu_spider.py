@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from ..browser.captcha import DdddocrSolver
 from ..browser.manager import BrowserManager
@@ -18,7 +18,7 @@ from ..http.client import HttpClient
 from .base import BaseSpider
 
 if TYPE_CHECKING:
-    from ..config import AppSettings, CourseItem
+    from ..config import AppSettings
     from ..domain.models import SessionData
 
 logger = logging.getLogger(__name__)
@@ -40,12 +40,14 @@ class YnuCourseSpider(BaseSpider):
         _max_workers: Maximum concurrent monitoring threads.
     """
 
-    def __init__(self, settings: AppSettings, max_workers: int = 4) -> None:
+    MAX_CONSECUTIVE_LOGIN_FAILURES = 5
+
+    def __init__(self, settings: AppSettings, max_workers: int | None = None) -> None:
         """Initialize spider.
 
         Args:
             settings: Application settings.
-            max_workers: Maximum concurrent course monitors.
+            max_workers: Optional upper bound for monitor threads.
         """
         super().__init__()
         self._settings = settings
@@ -55,16 +57,13 @@ class YnuCourseSpider(BaseSpider):
 
     def run_loop(self) -> None:
         """Main execution loop with auto-reconnect."""
+        login_failures = 0
+
         while not self.is_stopped():
             try:
                 logger.info("Attempting login...")
                 session = self._perform_login()
-
-                if not session:
-                    logger.error("Login failed, retrying in 10s")
-                    self._browser.shutdown()
-                    time.sleep(10)
-                    continue
+                login_failures = 0
 
                 self._http.set_auth(session.token, session.cookies)
 
@@ -82,8 +81,18 @@ class YnuCourseSpider(BaseSpider):
                     logger.info("Session expired or error, re-logging...")
 
             except LoginError as exc:
-                logger.error("Login error: %s", exc)
+                login_failures += 1
+                logger.error(
+                    "Login error (%d/%d): %s",
+                    login_failures,
+                    self.MAX_CONSECUTIVE_LOGIN_FAILURES,
+                    exc,
+                )
                 self._browser.shutdown()
+                if login_failures >= self.MAX_CONSECUTIVE_LOGIN_FAILURES:
+                    logger.error("Too many consecutive login failures, stopping spider")
+                    self.stop()
+                    break
                 time.sleep(10)
 
             except Exception as exc:
@@ -94,20 +103,40 @@ class YnuCourseSpider(BaseSpider):
             if not self.is_stopped():
                 time.sleep(2)
 
-    def _perform_login(self) -> Optional["SessionData"]:
+    def _perform_login(self) -> SessionData:
         """Perform login and return session data.
 
         Returns:
-            SessionData if login succeeds, otherwise None.
+            SessionData if login succeeds.
         """
         solver = DdddocrSolver()
         login_service = LoginService(self._settings, self._browser, solver)
 
         try:
             return login_service.login()
+        except LoginError:
+            raise
         except Exception as exc:
             logger.error("Login failed: %s", exc)
-            return None
+            raise LoginError(f"Login failed: {exc}") from exc
+
+    def _resolve_worker_count(self, total_courses: int) -> int:
+        """Compute worker count while avoiding monitor starvation."""
+        if self._max_workers is None:
+            return total_courses
+
+        configured = max(1, self._max_workers)
+        if configured < total_courses:
+            logger.warning(
+                "Configured max_workers=%d is less than courses=%d; "
+                "using %d to avoid monitor starvation",
+                configured,
+                total_courses,
+                total_courses,
+            )
+            return total_courses
+
+        return min(configured, total_courses)
 
     def _run_monitoring(self, selector: CourseSelector) -> bool:
         """Run course monitoring with thread pool.
@@ -124,15 +153,16 @@ class YnuCourseSpider(BaseSpider):
             logger.warning("No courses configured")
             return True
 
-        futures: list[Future] = []
+        futures: list[Future[bool]] = []
         batch_stop_event = threading.Event()
         success_count = 0
         total_courses = len(courses)
+        worker_count = self._resolve_worker_count(total_courses)
 
         def should_stop() -> bool:
             return self.is_stopped() or batch_stop_event.is_set()
 
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
             for course, course_type in courses:
                 future = executor.submit(
                     selector.run_monitoring_loop,
@@ -142,7 +172,11 @@ class YnuCourseSpider(BaseSpider):
                 )
                 futures.append(future)
 
-            logger.info("Started %d monitoring threads", len(futures))
+            logger.info(
+                "Started %d monitoring threads for %d courses",
+                len(futures),
+                total_courses,
+            )
 
             for future in as_completed(futures):
                 try:
@@ -163,6 +197,8 @@ class YnuCourseSpider(BaseSpider):
                             logger.info("Continue monitoring remaining %d courses", total_courses - success_count)
                 except Exception as exc:
                     logger.error("Thread error: %s", exc)
+                    batch_stop_event.set()
+                    return False
 
         return True
 
