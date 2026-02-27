@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "selenium>=4.15.0",
-    "ddddocr>=1.0.6,<1.6.0",
+    "ddddocr>=1.4.0,<1.6.0",
     "requests>=2.31.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
