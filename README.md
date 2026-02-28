@@ -37,6 +37,19 @@
 - **并发抢课**：线程池并行监控多门课程
 - **会话保活**：自动检测过期并重新登录
 - **微信提醒**：集成 Server酱推送，结果即时送达
+- **通知收尾**：提醒异步发送，监控批次结束前会等待通知线程完成，降低退出时丢消息风险
+- **登录稳健性**：仅在检测到真实选课页信号（`aPublicCourse` 或 `currentBatch`）后继续会话提取
+
+---
+
+## 最近更新
+
+- 修复并发线程数计算：`max_workers` 现在被严格视为上限，不再被课程数强制抬高
+- 优化通知发送：移除 daemon 通知线程，新增等待机制，确保进程收尾阶段尽量完成推送
+- 强化登录页面判定：`_wait_course_page_ready` 不再仅凭 URL 中 `token=` 判定成功
+- 增强 `courseBtn` 容错：按钮瞬时缺失时会告警并重试，避免直接抛错中断
+- 改进调试可观测性：准备点击 `courseBtn` 的最佳努力步骤失败时输出 `DEBUG` 日志
+- 补充回归测试覆盖以上场景（当前测试集共 11 项，均通过）
 
 ---
 
@@ -208,6 +221,25 @@ ynu-spider --headless
 # 调整日志级别
 ynu-spider --log-level DEBUG
 ```
+
+如需限制监控并发（`max_workers`），请使用 Python API（CLI 暂未开放该参数）：
+
+```python
+from pathlib import Path
+
+from ynu_xk_spider.config import AppSettings
+from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
+
+settings = AppSettings.load(Path("config.json"))
+spider = YnuCourseSpider(settings, max_workers=3)
+spider.start()
+```
+
+`max_workers` 语义说明：
+
+- 仅在显式传入时生效
+- 最小值为 `1`
+- 实际线程数为 `min(max_workers, 课程总数)`
 
 ### 5. 停止
 
