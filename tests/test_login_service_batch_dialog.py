@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from typing import Any
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
@@ -11,8 +12,8 @@ from ynu_xk_spider.domain.services.login import LoginService
 
 
 class _DummyBrowser:
-    def get_driver(self) -> None:
-        return None
+    def get_driver(self) -> Any:
+        raise AssertionError("Dummy browser should not be asked for a real driver in this test")
 
     def shutdown(self) -> None:
         return None
@@ -120,6 +121,40 @@ class _FakeDriver:
             element.click()
 
 
+class _CourseReadyDriver:
+    def __init__(
+        self,
+        *,
+        has_public_course: bool = False,
+        current_batch: str | None = None,
+        current_url: str = "https://example.invalid/path?token=abc123",
+    ) -> None:
+        self._has_public_course = has_public_course
+        self._current_batch = current_batch
+        self.current_url = current_url
+
+    def find_elements(self, by: str, value: str) -> list[_FakeElement]:
+        if by == By.ID and value == "aPublicCourse" and self._has_public_course:
+            return [_FakeElement()]
+        return []
+
+    def execute_script(self, script: str) -> str | None:
+        if script == 'return sessionStorage.getItem("currentBatch");':
+            return self._current_batch
+        return None
+
+
+class _MissingCourseBtnDriver:
+    def __init__(self) -> None:
+        self.find_attempts = 0
+
+    def find_element(self, by: str, value: str) -> _FakeElement:
+        if by == By.ID and value == "courseBtn":
+            self.find_attempts += 1
+            raise NoSuchElementException()
+        raise NoSuchElementException()
+
+
 def _build_service() -> LoginService:
     settings = AppSettings(student_code="20230001", password="secret")
     return LoginService(settings, _DummyBrowser(), _DummySolver())
@@ -154,3 +189,46 @@ def test_handle_batch_selection_dialog_noop_without_dialog(monkeypatch) -> None:
     service._handle_batch_selection_dialog(driver)
 
     assert driver.confirm_button.click_count == 0
+
+
+def test_wait_course_page_ready_rejects_token_only_url(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ynu_xk_spider.domain.services.login.WebDriverWait",
+        _ImmediateWait,
+    )
+    service = _build_service()
+    driver = _CourseReadyDriver(has_public_course=False, current_batch=None)
+
+    assert service._wait_course_page_ready(driver, timeout=1) is False
+
+
+def test_wait_course_page_ready_accepts_current_batch_signal(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ynu_xk_spider.domain.services.login.WebDriverWait",
+        _ImmediateWait,
+    )
+    service = _build_service()
+    driver = _CourseReadyDriver(
+        has_public_course=False,
+        current_batch='{"code":"2024-2025-2"}',
+    )
+
+    assert service._wait_course_page_ready(driver, timeout=1) is True
+
+
+def test_open_course_selection_page_retries_when_course_button_missing(monkeypatch) -> None:
+    service = _build_service()
+    driver = _MissingCourseBtnDriver()
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_for_start_button_click",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        "ynu_xk_spider.domain.services.login.time.sleep",
+        lambda _: None,
+    )
+
+    assert service._open_course_selection_page(driver) is False
+    assert driver.find_attempts == service.MAX_START_BUTTON_ATTEMPTS

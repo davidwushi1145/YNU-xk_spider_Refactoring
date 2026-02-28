@@ -47,7 +47,7 @@ class _FakeApi:
         )
 
 
-def test_notifications_are_async_and_do_not_block_selection() -> None:
+def test_notifications_are_async_and_flushed_on_wait() -> None:
     settings = AppSettings(student_code="20230001", password="secret")
     notifier = _SlowNotifier()
     selector = CourseSelector(api=_FakeApi(), settings=settings, notifier=notifier)
@@ -60,5 +60,5 @@ def test_notifications_are_async_and_do_not_block_selection() -> None:
     assert result is True
     assert elapsed < 0.2
 
-    time.sleep(0.35)
-    assert len(notifier.messages) >= 1
+    selector.wait_for_notifications()
+    assert len(notifier.messages) == 2

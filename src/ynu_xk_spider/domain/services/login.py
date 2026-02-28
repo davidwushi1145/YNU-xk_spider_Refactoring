@@ -412,19 +412,19 @@ class LoginService:
         try:
             active_ele = driver.switch_to.active_element
             active_ele.send_keys(Keys.ESCAPE)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to send ESC to active element: %s", exc)
 
         try:
             body = driver.find_element(By.TAG_NAME, "body")
             body.send_keys(Keys.ESCAPE)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to send ESC to body: %s", exc)
 
         try:
             driver.execute_script("window.scrollTo(0, 0);")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to scroll viewport to top before courseBtn click: %s", exc)
 
         try:
             driver.execute_script(
@@ -436,14 +436,24 @@ class LoginService:
                 document.body.style.overflow = 'hidden';
                 """
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to enforce page top/overflow state before courseBtn click: %s", exc)
 
     def _open_course_selection_page(self, driver: WebDriver) -> bool:
         """Click start button and verify course page is actually opened."""
         for attempt in range(self.MAX_START_BUTTON_ATTEMPTS):
             self._prepare_for_start_button_click(driver)
-            start_ele = driver.find_element(By.ID, "courseBtn")
+            try:
+                start_ele = driver.find_element(By.ID, "courseBtn")
+            except NoSuchElementException:
+                logger.warning(
+                    "courseBtn not found when attempting to open course page "
+                    "(attempt %d/%d)",
+                    attempt + 1,
+                    self.MAX_START_BUTTON_ATTEMPTS,
+                )
+                time.sleep(1)
+                continue
             self._safe_click(driver, start_ele)
             logger.info("Clicked courseBtn (attempt %d)", attempt + 1)
 
@@ -464,8 +474,7 @@ class LoginService:
         try:
             WebDriverWait(driver, timeout).until(
                 lambda d: (
-                    "token=" in d.current_url
-                    or bool(d.find_elements(By.ID, "aPublicCourse"))
+                    bool(d.find_elements(By.ID, "aPublicCourse"))
                     or bool(
                         d.execute_script('return sessionStorage.getItem("currentBatch");')
                     )

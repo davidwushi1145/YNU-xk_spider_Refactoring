@@ -10,7 +10,7 @@ from ynu_xk_spider.config import AppSettings
 
 
 @pytest.fixture(autouse=True)
-def _reset_browser_manager() -> Generator[None]:
+def _reset_browser_manager() -> Generator[None, None, None]:
     BrowserManager.reset()
     yield
     BrowserManager.reset()

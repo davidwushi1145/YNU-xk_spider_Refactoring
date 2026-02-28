@@ -121,21 +121,11 @@ class YnuCourseSpider(BaseSpider):
             raise LoginError(f"Login failed: {exc}") from exc
 
     def _resolve_worker_count(self, total_courses: int) -> int:
-        """Compute worker count while avoiding monitor starvation."""
+        """Compute worker count for the thread pool."""
         if self._max_workers is None:
             return total_courses
 
         configured = max(1, self._max_workers)
-        if configured < total_courses:
-            logger.warning(
-                "Configured max_workers=%d is less than courses=%d; "
-                "using %d to avoid monitor starvation",
-                configured,
-                total_courses,
-                total_courses,
-            )
-            return total_courses
-
         return min(configured, total_courses)
 
     def _run_monitoring(self, selector: CourseSelector) -> bool:
@@ -162,45 +152,58 @@ class YnuCourseSpider(BaseSpider):
         def should_stop() -> bool:
             return self.is_stopped() or batch_stop_event.is_set()
 
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for course, course_type in courses:
-                future = executor.submit(
-                    selector.run_monitoring_loop,
-                    course,
-                    course_type,
-                    should_stop,
+        try:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                for course, course_type in courses:
+                    future = executor.submit(
+                        selector.run_monitoring_loop,
+                        course,
+                        course_type,
+                        should_stop,
+                    )
+                    futures.append(future)
+
+                logger.info(
+                    "Started %d monitoring threads for %d courses",
+                    len(futures),
+                    total_courses,
                 )
-                futures.append(future)
 
-            logger.info(
-                "Started %d monitoring threads for %d courses",
-                len(futures),
-                total_courses,
-            )
-
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result is False:
-                        logger.info("Thread signaled session expired")
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        if result is False:
+                            logger.info("Thread signaled session expired")
+                            batch_stop_event.set()
+                            return False
+                        elif result is True:
+                            success_count += 1
+                            logger.info(
+                                "Course selection successful (%d/%d)",
+                                success_count,
+                                total_courses,
+                            )
+                            # Check if all courses are completed
+                            if success_count >= total_courses:
+                                logger.info(
+                                    "All %d courses selected successfully, stopping spider",
+                                    total_courses,
+                                )
+                                self.stop()
+                                return True
+                            else:
+                                logger.info(
+                                    "Continue monitoring remaining %d courses",
+                                    total_courses - success_count,
+                                )
+                    except Exception as exc:
+                        logger.error("Thread error: %s", exc)
                         batch_stop_event.set()
                         return False
-                    elif result is True:
-                        success_count += 1
-                        logger.info("Course selection successful (%d/%d)", success_count, total_courses)
-                        # Check if all courses are completed
-                        if success_count >= total_courses:
-                            logger.info("All %d courses selected successfully, stopping spider", total_courses)
-                            self.stop()
-                            return True
-                        else:
-                            logger.info("Continue monitoring remaining %d courses", total_courses - success_count)
-                except Exception as exc:
-                    logger.error("Thread error: %s", exc)
-                    batch_stop_event.set()
-                    return False
 
-        return True
+            return True
+        finally:
+            selector.wait_for_notifications()
 
     def on_stop(self) -> None:
         """Cleanup on spider stop."""

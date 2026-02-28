@@ -85,16 +85,42 @@ class CourseSelector:
         self._api = api
         self._settings = settings
         self._notifier = notifier or NotificationService(settings.server_chan_key)
+        self._notification_threads: list[threading.Thread] = []
+        self._notification_lock = threading.Lock()
 
     def _notify_async(self, title: str, content: str) -> None:
         """Send notifications off the critical selection path."""
         if not self._notifier.enabled:
             return
-        threading.Thread(
+        thread = threading.Thread(
             target=self._notifier.send,
             args=(title, content),
-            daemon=True,
-        ).start()
+            name="notification-sender",
+        )
+        thread.start()
+        with self._notification_lock:
+            # Keep only in-flight workers before tracking the new one.
+            self._notification_threads = [t for t in self._notification_threads if t.is_alive()]
+            if thread.is_alive():
+                self._notification_threads.append(thread)
+
+    def wait_for_notifications(self, timeout: float | None = None) -> None:
+        """Wait for pending async notifications to finish sending."""
+        with self._notification_lock:
+            threads = list(self._notification_threads)
+            self._notification_threads.clear()
+
+        if timeout is None:
+            for thread in threads:
+                thread.join()
+            return
+
+        deadline = time.monotonic() + timeout
+        for thread in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
 
     def run_monitoring_loop(
         self,

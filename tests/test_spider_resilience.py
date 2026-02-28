@@ -11,7 +11,7 @@ from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
 
 
 @pytest.fixture(autouse=True)
-def _reset_browser_manager() -> Generator[None]:
+def _reset_browser_manager() -> Generator[None, None, None]:
     BrowserManager.reset()
     yield
     BrowserManager.reset()
@@ -21,9 +21,9 @@ def _build_settings() -> AppSettings:
     return AppSettings(student_code="20230001", password="secret")
 
 
-def test_worker_count_is_raised_to_course_count() -> None:
+def test_worker_count_respects_limit() -> None:
     spider = YnuCourseSpider(_build_settings(), max_workers=1)
-    assert spider._resolve_worker_count(3) == 3
+    assert spider._resolve_worker_count(3) == 1
 
 
 def test_run_loop_stops_after_repeated_login_failures(
