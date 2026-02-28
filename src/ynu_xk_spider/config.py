@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
@@ -29,7 +29,7 @@ class CourseItem(BaseModel):
     teacher: str = Field(..., min_length=1, description="Teacher name to match")
 
     @classmethod
-    def from_list(cls, data: list[str]) -> "CourseItem":
+    def from_list(cls, data: list[str]) -> CourseItem:
         """Create from legacy [name, teacher] list format.
 
         Args:
@@ -66,14 +66,22 @@ class CoursesConfig(BaseModel):
         """
         if not v:
             return []
-        result = []
-        for item in v:
+        if not isinstance(v, list):
+            raise ValueError("Courses must be a list")
+
+        result: list[CourseItem] = []
+        for index, item in enumerate(v):
             if isinstance(item, dict):
                 result.append(CourseItem(**item))
             elif isinstance(item, (list, tuple)) and len(item) >= 2:
                 result.append(CourseItem(name=item[0], teacher=item[1]))
             elif isinstance(item, CourseItem):
                 result.append(item)
+            else:
+                raise ValueError(
+                    f"Invalid course item at index {index}: "
+                    "expected {'name','teacher'} or [name, teacher]"
+                )
         return result
 
     @property
@@ -146,10 +154,10 @@ class AppSettings(BaseSettings):
     )
     student_code: str = Field(..., min_length=1, description="Student ID")
     password: SecretStr = Field(..., description="Account password")
-    chrome_driver_path: Optional[Path] = Field(
+    chrome_driver_path: Path | None = Field(
         default=None, description="Path to chromedriver"
     )
-    server_chan_key: Optional[str] = Field(
+    server_chan_key: str | None = Field(
         default=None, description="ServerChan notification key"
     )
     courses: CoursesConfig = Field(
@@ -192,7 +200,7 @@ class AppSettings(BaseSettings):
 
     @field_validator("chrome_driver_path", mode="before")
     @classmethod
-    def _normalize_chromedriver(cls, v: Path | str | None) -> Optional[Path]:
+    def _normalize_chromedriver(cls, v: Path | str | None) -> Path | None:
         """Normalize chromedriver path value.
 
         Treats empty strings as None to avoid invalid Service paths.
@@ -210,7 +218,7 @@ class AppSettings(BaseSettings):
         return Path(v)
 
     @model_validator(mode="after")
-    def _validate_poll_interval(self) -> "AppSettings":
+    def _validate_poll_interval(self) -> AppSettings:
         """Ensure min <= max for poll interval.
 
         Returns:
@@ -226,7 +234,7 @@ class AppSettings(BaseSettings):
         return self
 
     @classmethod
-    def load(cls, config_file: Optional[Path] = None) -> "AppSettings":
+    def load(cls, config_file: Path | None = None) -> AppSettings:
         """Load settings from JSON file with env override.
 
         Environment variables take precedence over file-based configuration.

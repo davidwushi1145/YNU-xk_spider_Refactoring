@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
@@ -43,6 +44,7 @@ class LoginService:
 
     MAX_LOGIN_ATTEMPTS = 10
     MAX_CLICK_ATTEMPTS = 5
+    MAX_START_BUTTON_ATTEMPTS = 3
     INPUT_DELAY = 1.0
     CLICK_DELAY = 1.0
 
@@ -238,15 +240,114 @@ class LoginService:
         except TimeoutException:
             logger.debug("Entry button not found, may already be on next page")
 
-        ok_xpath = '//button[@class="bh-btn bh-btn bh-btn-primary bh-pull-right"]'
+        self._handle_batch_selection_dialog(driver)
+        self._handle_generic_confirmation_dialog(driver)
+
+        try:
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.ID, "courseBtn"))
+            )
+        except TimeoutException as err:
+            raise LoginError("Could not find courseBtn") from err
+
+        if not self._open_course_selection_page(driver):
+            raise LoginError("Failed to open course selection page after clicking courseBtn")
+
+        time.sleep(2)
+
+    def _handle_batch_selection_dialog(self, driver: WebDriver) -> None:
+        """Handle elective batch dialog, including acknowledgement checkbox.
+
+        Third-round selection may require:
+        1) selecting an elective batch radio option;
+        2) checking the acknowledgement checkbox ("我已知晓");
+        3) clicking the confirm button ("确定").
+        """
+        radio_css = 'input.cv-electiveBatch-select[name="electiveBatchSelect"]'
+        confirm_xpath = (
+            '//button[contains(@class, "bh-btn-primary") and normalize-space()="确定"]'
+        )
+        ack_css = 'input#tyxz-input, input[name="tyxz"]'
+
+        try:
+            WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, radio_css))
+            )
+        except TimeoutException:
+            logger.debug("Elective batch dialog not present")
+            return
+
+        radios = driver.find_elements(By.CSS_SELECTOR, radio_css)
+        if not radios:
+            logger.debug("Elective batch radios not found")
+            return
+
+        target_radio = self._pick_selectable_batch_radio(radios)
+        if target_radio is None:
+            raise LoginError("No selectable elective batch found")
+
+        if not target_radio.is_selected():
+            self._safe_click(driver, target_radio)
+            time.sleep(0.3)
+            if not target_radio.is_selected():
+                raise LoginError("Failed to select elective batch radio")
+        logger.info("Selected elective batch")
+
+        ack_candidates = driver.find_elements(By.CSS_SELECTOR, ack_css)
+        ack_checkbox = next(
+            (
+                ele
+                for ele in ack_candidates
+                if ele.is_displayed() and ele.is_enabled()
+            ),
+            None,
+        )
+        if ack_checkbox is not None and not ack_checkbox.is_selected():
+            self._safe_click(driver, ack_checkbox)
+            time.sleep(0.2)
+            logger.info("Checked batch acknowledgement checkbox")
+
+        confirm_buttons = driver.find_elements(By.XPATH, confirm_xpath)
+        confirm_button = next(
+            (ele for ele in confirm_buttons if ele.is_displayed() and ele.is_enabled()),
+            None,
+        )
+        if confirm_button is None:
+            raise LoginError("Elective batch confirm button not found")
+
+        self._safe_click(driver, confirm_button)
+        logger.info("Confirmed elective batch dialog")
+
+        try:
+            WebDriverWait(driver, 8).until(
+                lambda d: bool(d.find_elements(By.ID, "courseBtn"))
+                or not d.find_elements(By.CSS_SELECTOR, radio_css)
+            )
+        except TimeoutException:
+            logger.debug("Elective batch dialog may still be visible after confirm")
+
+    def _handle_generic_confirmation_dialog(self, driver: WebDriver) -> None:
+        """Handle generic post-login confirmation dialogs when present."""
+        ok_xpath = (
+            '//button[contains(@class, "bh-btn-primary") and '
+            'normalize-space()="确定"]'
+        )
         for retry in range(3):
             try:
                 WebDriverWait(driver, 5).until(
                     EC.presence_of_element_located((By.XPATH, ok_xpath))
                 )
-                ok_ele = driver.find_element(By.XPATH, ok_xpath)
-                if ok_ele.is_displayed():
-                    ok_ele.click()
+                ok_elements = driver.find_elements(By.XPATH, ok_xpath)
+                ok_ele = next(
+                    (
+                        ele
+                        for ele in ok_elements
+                        if ele.is_displayed() and ele.is_enabled()
+                    ),
+                    None,
+                )
+                if ok_ele is not None:
+                    self._safe_click(driver, ok_ele)
                     logger.info("Clicked confirmation dialog")
                     time.sleep(1)
                     break
@@ -254,25 +355,135 @@ class LoginService:
                 if retry < 2:
                     time.sleep(1)
 
+    def _pick_selectable_batch_radio(
+        self,
+        radios: list[WebElement],
+    ) -> WebElement | None:
+        """Pick an available elective batch radio by data-value metadata."""
+        fallback: WebElement | None = None
+
+        for radio in radios:
+            if not radio.is_displayed() or not radio.is_enabled():
+                continue
+            if fallback is None:
+                fallback = radio
+
+            data_value = radio.get_attribute("data-value")
+            if not data_value:
+                continue
+
+            try:
+                batch_data = json.loads(data_value)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(batch_data, dict):
+                continue
+
+            can_select = str(batch_data.get("canSelect", "1"))
+            no_select_reason = batch_data.get("noSelectReason")
+            if can_select == "1" and not no_select_reason:
+                return radio
+
+        return fallback
+
+    def _safe_click(self, driver: WebDriver, element: WebElement) -> None:
+        """Click element with JS fallback for intercepted clicks."""
         try:
-            start_ele = WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.ID, "courseBtn"))
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});",
+                element,
             )
-            driver.execute_script("arguments[0].click();", start_ele)
-            logger.info("Clicked courseBtn via JS")
-            time.sleep(1)
-        except TimeoutException:
-            raise LoginError("Could not find courseBtn")
+        except Exception:
+            pass
 
         try:
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.ID, "aPublicCourse"))
+            element.click()
+            return
+        except Exception:
+            pass
+
+        try:
+            driver.execute_script("arguments[0].click();", element)
+        except Exception as exc:
+            raise LoginError(f"Failed to click required element: {exc}") from exc
+
+    def _prepare_for_start_button_click(self, driver: WebDriver) -> None:
+        """Dismiss transient overlays and force viewport to page top."""
+        try:
+            active_ele = driver.switch_to.active_element
+            active_ele.send_keys(Keys.ESCAPE)
+        except Exception as exc:
+            logger.debug("Failed to send ESC to active element: %s", exc)
+
+        try:
+            body = driver.find_element(By.TAG_NAME, "body")
+            body.send_keys(Keys.ESCAPE)
+        except Exception as exc:
+            logger.debug("Failed to send ESC to body: %s", exc)
+
+        try:
+            driver.execute_script("window.scrollTo(0, 0);")
+        except Exception as exc:
+            logger.debug("Failed to scroll viewport to top before courseBtn click: %s", exc)
+
+        try:
+            driver.execute_script(
+                """
+                window.scrollTo(0, 0);
+                document.documentElement.scrollTop = 0;
+                document.body.scrollTop = 0;
+                document.documentElement.style.overflow = 'hidden';
+                document.body.style.overflow = 'hidden';
+                """
+            )
+        except Exception as exc:
+            logger.debug("Failed to enforce page top/overflow state before courseBtn click: %s", exc)
+
+    def _open_course_selection_page(self, driver: WebDriver) -> bool:
+        """Click start button and verify course page is actually opened."""
+        for attempt in range(self.MAX_START_BUTTON_ATTEMPTS):
+            self._prepare_for_start_button_click(driver)
+            try:
+                start_ele = driver.find_element(By.ID, "courseBtn")
+            except NoSuchElementException:
+                logger.warning(
+                    "courseBtn not found when attempting to open course page "
+                    "(attempt %d/%d)",
+                    attempt + 1,
+                    self.MAX_START_BUTTON_ATTEMPTS,
+                )
+                time.sleep(1)
+                continue
+            self._safe_click(driver, start_ele)
+            logger.info("Clicked courseBtn (attempt %d)", attempt + 1)
+
+            if self._wait_course_page_ready(driver, timeout=10):
+                return True
+
+            logger.warning(
+                "courseBtn click did not open course page (attempt %d/%d)",
+                attempt + 1,
+                self.MAX_START_BUTTON_ATTEMPTS,
+            )
+            time.sleep(1)
+
+        return False
+
+    def _wait_course_page_ready(self, driver: WebDriver, timeout: int) -> bool:
+        """Check if we have successfully entered the course selection page."""
+        try:
+            WebDriverWait(driver, timeout).until(
+                lambda d: (
+                    bool(d.find_elements(By.ID, "aPublicCourse"))
+                    or bool(
+                        d.execute_script('return sessionStorage.getItem("currentBatch");')
+                    )
+                )
             )
             logger.info("Course selection page loaded")
+            return True
         except TimeoutException:
-            logger.debug("Course selection page element not found, continuing")
-
-        time.sleep(2)
+            return False
 
     def _extract_session_data(self, driver: WebDriver) -> SessionData:
         """Extract authentication data from browser session.
@@ -287,7 +498,7 @@ class LoginService:
             LoginError: If extraction fails.
         """
         current_url = driver.current_url
-        token: Optional[str] = None
+        token: str | None = None
 
         if "token=" in current_url:
             token = current_url.split("token=")[-1].split("&")[0]

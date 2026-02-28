@@ -5,7 +5,7 @@ from __future__ import annotations
 import atexit
 import logging
 import threading
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, cast
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -31,18 +31,18 @@ class BrowserManager:
         _inst_lock: Lock for singleton creation.
     """
 
-    _instance: Optional["BrowserManager"] = None
+    _instance: BrowserManager | None = None
     _inst_lock = threading.Lock()
 
     def __init__(self, settings: AppSettings) -> None:
         """Initialize manager with settings. Use instance() instead."""
         self._settings = settings
-        self._driver: Optional[WebDriver] = None
+        self._driver: WebDriver | None = None
         self._driver_lock = threading.Lock()
         atexit.register(self.shutdown)
 
     @classmethod
-    def instance(cls, settings: AppSettings) -> "BrowserManager":
+    def instance(cls, settings: AppSettings) -> BrowserManager:
         """Get or create the singleton instance.
 
         Args:
@@ -93,6 +93,24 @@ class BrowserManager:
             if self._settings.headless:
                 options.add_argument("--headless=new")
 
+            # Disable Chrome credential UI to avoid native "save password" popups
+            # that can steal focus and block automated page clicks.
+            options.add_experimental_option(
+                "prefs",
+                {
+                    "credentials_enable_service": False,
+                    "profile.password_manager_enabled": False,
+                    "profile.password_manager_leak_detection": False,
+                    "autofill.profile_enabled": False,
+                    "autofill.credit_card_enabled": False,
+                },
+            )
+            options.add_argument(
+                "--disable-features="
+                "PasswordManagerOnboarding,"
+                "PasswordManagerRedesign,"
+                "PasswordManagerEnabled"
+            )
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
             options.add_argument("--window-size=1920,1080")
@@ -103,9 +121,9 @@ class BrowserManager:
 
             if self._settings.chrome_driver_path:
                 service = Service(executable_path=str(self._settings.chrome_driver_path))
-                driver = webdriver.Chrome(service=service, options=options)
+                driver = cast(WebDriver, webdriver.Chrome(service=service, options=options))
             else:
-                driver = webdriver.Chrome(options=options)
+                driver = cast(WebDriver, webdriver.Chrome(options=options))
 
             driver.execute_cdp_cmd(
                 "Page.addScriptToEvaluateOnNewDocument",
