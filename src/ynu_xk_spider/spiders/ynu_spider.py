@@ -4,21 +4,21 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 from ..browser.captcha import DdddocrSolver
 from ..browser.manager import BrowserManager
+from ..domain.models import MonitorOutcome
 from ..domain.services.course_api import CourseApiClient
 from ..domain.services.course_selector import CourseSelector
 from ..domain.services.login import LoginService
-from ..exceptions import LoginError
+from ..exceptions import LoginError, StopRequestedError
 from ..http.client import HttpClient
 from .base import BaseSpider
 
 if TYPE_CHECKING:
-    from ..config import AppSettings
+    from ..config import AppSettings, CourseItem
     from ..domain.models import SessionData
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,8 @@ class YnuCourseSpider(BaseSpider):
         super().__init__()
         self._settings = settings
         self._browser = BrowserManager.instance(settings)
-        self._http = HttpClient(settings)
+        self._http = HttpClient(settings, stop_event=self.stop_event)
+        self._solver = DdddocrSolver()
         self._max_workers = max_workers
 
     def run_loop(self) -> None:
@@ -77,9 +78,19 @@ class YnuCourseSpider(BaseSpider):
 
                 selector = CourseSelector(api, self._settings)
 
-                if not self._run_monitoring(selector):
+                monitoring_result = self._run_monitoring(selector)
+                if monitoring_result is MonitorOutcome.STOPPED:
+                    logger.info("Monitoring stopped by request")
+                    break
+                if monitoring_result in (
+                    MonitorOutcome.SESSION_EXPIRED,
+                    MonitorOutcome.FAILED,
+                ):
                     logger.info("Session expired or error, re-logging...")
 
+            except StopRequestedError:
+                logger.info("Stop requested during login")
+                break
             except LoginError as exc:
                 login_failures += 1
                 logger.error(
@@ -93,15 +104,22 @@ class YnuCourseSpider(BaseSpider):
                     logger.error("Too many consecutive login failures, stopping spider")
                     self.stop()
                     break
-                time.sleep(10)
+                if not self._wait_or_stop(10):
+                    break
 
             except Exception as exc:
                 logger.error("Unexpected error: %s", exc)
                 self._browser.shutdown()
-                time.sleep(5)
+                if not self._wait_or_stop(5):
+                    break
 
             if not self.is_stopped():
-                time.sleep(2)
+                if not self._wait_or_stop(2):
+                    break
+
+    def _wait_or_stop(self, delay: float) -> bool:
+        """Wait for a delay unless a stop request arrives first."""
+        return not self.stop_event.wait(delay)
 
     def _perform_login(self) -> SessionData:
         """Perform login and return session data.
@@ -109,11 +127,17 @@ class YnuCourseSpider(BaseSpider):
         Returns:
             SessionData if login succeeds.
         """
-        solver = DdddocrSolver()
-        login_service = LoginService(self._settings, self._browser, solver)
+        login_service = LoginService(
+            self._settings,
+            self._browser,
+            self._solver,
+            is_stopped=self.is_stopped,
+        )
 
         try:
             return login_service.login()
+        except StopRequestedError:
+            raise
         except LoginError:
             raise
         except Exception as exc:
@@ -128,80 +152,95 @@ class YnuCourseSpider(BaseSpider):
         configured = max(1, self._max_workers)
         return min(configured, total_courses)
 
-    def _run_monitoring(self, selector: CourseSelector) -> bool:
+    def _run_monitoring(self, selector: CourseSelector) -> MonitorOutcome:
         """Run course monitoring with thread pool.
 
         Args:
             selector: Course selector instance.
 
         Returns:
-            True if all tasks completed successfully, False if session expired.
+            Aggregate monitoring outcome for the current batch.
         """
         courses = self._settings.courses.all_courses
 
         if not courses:
             logger.warning("No courses configured")
-            return True
+            return MonitorOutcome.SUCCESS
 
-        futures: list[Future[bool]] = []
+        grouped_courses = self._group_course_targets(courses)
+        futures: list[Future[MonitorOutcome]] = []
+        future_targets: dict[Future[MonitorOutcome], list[CourseItem]] = {}
         batch_stop_event = threading.Event()
         success_count = 0
-        total_courses = len(courses)
-        worker_count = self._resolve_worker_count(total_courses)
+        total_targets = len(courses)
+        worker_count = self._resolve_worker_count(len(grouped_courses))
 
         def should_stop() -> bool:
             return self.is_stopped() or batch_stop_event.is_set()
 
         try:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                for course, course_type in courses:
+                for course_name, course_type, targets in grouped_courses:
                     future = executor.submit(
-                        selector.run_monitoring_loop,
-                        course,
+                        selector.run_group_monitoring_loop,
+                        course_name,
                         course_type,
+                        targets,
                         should_stop,
                     )
                     futures.append(future)
+                    future_targets[future] = targets
 
                 logger.info(
-                    "Started %d monitoring threads for %d courses",
+                    "Started %d monitoring threads for %d course groups covering %d targets",
                     len(futures),
-                    total_courses,
+                    len(grouped_courses),
+                    total_targets,
                 )
 
                 for future in as_completed(futures):
                     try:
                         result = future.result()
-                        if result is False:
-                            logger.info("Thread signaled session expired")
+                        if result is MonitorOutcome.STOPPED:
+                            if self.is_stopped():
+                                logger.info("Monitoring stopped")
+                                return MonitorOutcome.STOPPED
+                            logger.warning("Monitoring group stopped unexpectedly")
                             batch_stop_event.set()
-                            return False
-                        elif result is True:
-                            success_count += 1
+                            return MonitorOutcome.FAILED
+                        if result in (
+                            MonitorOutcome.SESSION_EXPIRED,
+                            MonitorOutcome.FAILED,
+                        ):
+                            logger.info("Monitoring group ended with %s", result.value)
+                            batch_stop_event.set()
+                            return result
+                        if result is MonitorOutcome.SUCCESS:
+                            success_count += len(future_targets[future])
                             logger.info(
                                 "Course selection successful (%d/%d)",
                                 success_count,
-                                total_courses,
+                                total_targets,
                             )
                             # Check if all courses are completed
-                            if success_count >= total_courses:
+                            if success_count >= total_targets:
                                 logger.info(
                                     "All %d courses selected successfully, stopping spider",
-                                    total_courses,
+                                    total_targets,
                                 )
                                 self.stop()
-                                return True
+                                return MonitorOutcome.SUCCESS
                             else:
                                 logger.info(
                                     "Continue monitoring remaining %d courses",
-                                    total_courses - success_count,
+                                    total_targets - success_count,
                                 )
                     except Exception as exc:
                         logger.error("Thread error: %s", exc)
                         batch_stop_event.set()
-                        return False
+                        return MonitorOutcome.FAILED
 
-            return True
+            return MonitorOutcome.SUCCESS
         finally:
             selector.wait_for_notifications()
 
@@ -209,3 +248,18 @@ class YnuCourseSpider(BaseSpider):
         """Cleanup on spider stop."""
         self._http.close()
         self._browser.shutdown()
+
+    def _group_course_targets(
+        self,
+        courses: list[tuple[CourseItem, str]],
+    ) -> list[tuple[str, str, list[CourseItem]]]:
+        """Group targets by (course type, course name) to avoid duplicate queries."""
+        grouped: dict[tuple[str, str], list[CourseItem]] = {}
+        for course, course_type in courses:
+            key = (course_type, course.name)
+            grouped.setdefault(key, []).append(course)
+
+        return [
+            (course_name, course_type, targets)
+            for (course_type, course_name), targets in grouped.items()
+        ]

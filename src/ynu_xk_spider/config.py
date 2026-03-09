@@ -14,7 +14,14 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -241,13 +248,16 @@ class AppSettings(BaseSettings):
 
         Args:
             config_file: Optional path to JSON config file.
-                        Defaults to config.json in current directory.
+                        Defaults to config.json in current directory. If the
+                        default file is missing, environment variables/.env are
+                        used as a fallback.
 
         Returns:
             Validated AppSettings instance.
 
         Raises:
-            ConfigError: If configuration is invalid or file not found.
+            ConfigError: If configuration is invalid or the requested config file
+                cannot be used.
         """
         from .exceptions import ConfigError
 
@@ -255,7 +265,16 @@ class AppSettings(BaseSettings):
             config_file = Path("config.json")
 
         if not config_file.exists():
-            raise ConfigError(f"Config file not found: {config_file}")
+            if config_file != Path("config.json"):
+                raise ConfigError(f"Config file not found: {config_file}")
+
+            try:
+                return cls()
+            except ValidationError as e:
+                raise ConfigError(
+                    "Config file not found: config.json. Provide the file or set "
+                    "required YNU_XK_* environment variables."
+                ) from e
 
         try:
             with open(config_file, encoding="utf-8") as f:

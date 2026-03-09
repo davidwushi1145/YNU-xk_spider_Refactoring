@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import requests  # type: ignore[import-untyped]
@@ -18,6 +20,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _ThreadSessionState:
+    """Thread-local requests session and its auth generation."""
+
+    session: requests.Session
+    generation: int
+
+
 class HttpClient:
     """HTTP client with automatic retry and session management.
 
@@ -28,7 +38,8 @@ class HttpClient:
     - Session expiration detection
 
     Attributes:
-        _session: Underlying requests.Session.
+        _thread_local: Per-thread session state storage.
+        _sessions: Registry of active sessions for coordinated shutdown.
         _timeout: Default request timeout.
         _settings: Application settings reference.
     """
@@ -39,30 +50,92 @@ class HttpClient:
         "Chrome/120.0.0.0 Safari/537.36"
     )
 
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Initialize HTTP client.
 
         Args:
             settings: Application settings.
+            stop_event: Optional stop event used to interrupt retry backoff.
         """
         self._settings = settings
         self._timeout = settings.http_timeout
-        self._session = requests.Session()
-        self._session_lock = threading.Lock()
+        self._stop_event = stop_event
+        self._thread_local = threading.local()
+        self._sessions: list[requests.Session] = []
+        self._sessions_lock = threading.Lock()
+        self._auth_lock = threading.Lock()
         self._token: str | None = None
-        self._setup_session()
+        self._cookies: dict[str, str] = {}
+        self._auth_generation = 0
+        self._base_headers = self._build_base_headers()
 
-    def _setup_session(self) -> None:
-        """Configure session with default headers."""
-        self._session.headers.update(
-            {
-                "User-Agent": self.USER_AGENT,
-                "Referer": f"{self._settings.base_url}xsxkapp/sys/xsxkapp/*default/index.do",
-                "Origin": self._settings.base_url.rstrip("/"),
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "X-Requested-With": "XMLHttpRequest",
-            }
+    def _build_base_headers(self) -> dict[str, str]:
+        """Build default headers shared by all per-thread sessions."""
+        return {
+            "User-Agent": self.USER_AGENT,
+            "Referer": f"{self._settings.base_url}xsxkapp/sys/xsxkapp/*default/index.do",
+            "Origin": self._settings.base_url.rstrip("/"),
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+    def _create_session(
+        self,
+        token: str | None,
+        cookies: dict[str, str],
+    ) -> requests.Session:
+        """Create a requests session bound to the current auth snapshot."""
+        session = requests.Session()
+        session.headers.update(self._base_headers)
+        if token:
+            session.headers.update(
+                {
+                    "Authorization": f"Bearer {token}",
+                    "Token": token,
+                }
+            )
+        if cookies:
+            session.cookies.update(cookies)
+        with self._sessions_lock:
+            self._sessions.append(session)
+        return session
+
+    def _discard_session(self, session: requests.Session) -> None:
+        """Remove a session from shutdown tracking if it is no longer current."""
+        with self._sessions_lock:
+            try:
+                self._sessions.remove(session)
+            except ValueError:
+                return
+
+    def _get_session(self) -> requests.Session:
+        """Get a thread-local session for the current auth generation."""
+        with self._auth_lock:
+            generation = self._auth_generation
+            token = self._token
+            cookies = dict(self._cookies)
+
+        state = getattr(self._thread_local, "session_state", None)
+        if isinstance(state, _ThreadSessionState) and state.generation == generation:
+            return state.session
+
+        if isinstance(state, _ThreadSessionState):
+            self._discard_session(state.session)
+            try:
+                state.session.close()
+            except Exception:
+                logger.debug("Failed to close stale thread-local HTTP session", exc_info=True)
+
+        session = self._create_session(token, cookies)
+        self._thread_local.session_state = _ThreadSessionState(
+            session=session,
+            generation=generation,
         )
+        return session
 
     def set_auth(self, token: str, cookies: dict[str, str]) -> None:
         """Set authentication credentials.
@@ -71,20 +144,24 @@ class HttpClient:
             token: Authentication token from login.
             cookies: Cookies from browser session.
         """
-        self._token = token
-        self._session.headers.update(
-            {
-                "Authorization": f"Bearer {token}",
-                "Token": token,
-            }
-        )
-        self._session.cookies.update(cookies)
+        with self._auth_lock:
+            self._token = token
+            self._cookies = dict(cookies)
+            self._auth_generation += 1
         logger.debug("Auth configured with token: %s...", token[:8] if token else "N/A")
 
     @property
     def token(self) -> str | None:
         """Current authentication token."""
-        return self._token
+        with self._auth_lock:
+            return self._token
+
+    def _sleep_for_retry(self, delay: float) -> bool:
+        """Sleep between retries, aborting early when stop is requested."""
+        if self._stop_event is None:
+            time.sleep(delay)
+            return True
+        return not self._stop_event.wait(delay)
 
     def _create_retry_decorator(self) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
         """Create retry decorator with current settings."""
@@ -95,6 +172,7 @@ class HttpClient:
             backoff=self._settings.retry_factor,
             jitter=0.1,
             logger=logger,
+            sleep=self._sleep_for_retry,
         )
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
@@ -116,8 +194,8 @@ class HttpClient:
         @self._create_retry_decorator()
         def _get() -> requests.Response:
             try:
-                with self._session_lock:
-                    resp = self._session.get(url, **kwargs)
+                session = self._get_session()
+                resp = session.get(url, **kwargs)
                 self._check_session_expired(resp)
                 return resp
             except requests.RequestException as exc:
@@ -152,8 +230,8 @@ class HttpClient:
         @self._create_retry_decorator()
         def _post() -> requests.Response:
             try:
-                with self._session_lock:
-                    resp = self._session.post(url, data=data, json=json, **kwargs)
+                session = self._get_session()
+                resp = session.post(url, data=data, json=json, **kwargs)
                 self._check_session_expired(resp)
                 return resp
             except requests.RequestException as exc:
@@ -184,4 +262,11 @@ class HttpClient:
 
     def close(self) -> None:
         """Close the session."""
-        self._session.close()
+        with self._sessions_lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+
+        for session in sessions:
+            session.close()
+
+        self._thread_local = threading.local()

@@ -1,6 +1,7 @@
 logs/
 .idea/
 .ace-tool/
+.omx/
 .claude/
 .selenium-cache/
 config.json

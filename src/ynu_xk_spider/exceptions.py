@@ -37,3 +37,7 @@ class SessionExpiredError(NetworkError):
 
 class CourseSelectionError(SpiderError):
     """Course selection business logic failure."""
+
+
+class StopRequestedError(SpiderError):
+    """Operation aborted because stop was requested."""

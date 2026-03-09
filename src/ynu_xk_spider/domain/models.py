@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,15 @@ class SessionData(BaseModel):
     cookies: dict[str, str]
     token: str
     batch_code: str
+
+
+class MonitorOutcome(Enum):
+    """Outcome of a monitoring loop or monitoring batch."""
+
+    SUCCESS = "success"
+    STOPPED = "stopped"
+    SESSION_EXPIRED = "session_expired"
+    FAILED = "failed"
 
 
 class CourseInfo(BaseModel):
