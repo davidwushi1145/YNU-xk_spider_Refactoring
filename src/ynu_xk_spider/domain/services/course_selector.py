@@ -7,11 +7,13 @@ import random
 import threading
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING
 
 import requests  # type: ignore[import-untyped]
 
 from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
+from ..models import MonitorOutcome
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
@@ -70,6 +72,8 @@ class CourseSelector:
         _notifier: Notification service.
     """
 
+    HOT_PATH_LOG_INTERVAL = 30.0
+
     def __init__(
         self,
         api: CourseApiClient,
@@ -86,49 +90,47 @@ class CourseSelector:
         self._api = api
         self._settings = settings
         self._notifier = notifier or NotificationService(settings.server_chan_key)
-        self._notification_threads: list[threading.Thread] = []
+        self._notification_executor: ThreadPoolExecutor | None = None
+        self._notification_futures: list[Future[None]] = []
         self._notification_lock = threading.Lock()
+        self._hot_path_log_times: dict[str, float] = {}
 
     def _notify_async(self, title: str, content: str) -> None:
         """Send notifications off the critical selection path."""
         if not self._notifier.enabled:
             return
-        thread = threading.Thread(
-            target=self._notifier.send,
-            args=(title, content),
-            name="notification-sender",
-        )
-        thread.start()
         with self._notification_lock:
-            # Keep only in-flight workers before tracking the new one.
-            self._notification_threads = [t for t in self._notification_threads if t.is_alive()]
-            if thread.is_alive():
-                self._notification_threads.append(thread)
+            self._notification_futures = [
+                future for future in self._notification_futures if not future.done()
+            ]
+            if self._notification_executor is None:
+                self._notification_executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="notification-sender",
+                )
+            future = self._notification_executor.submit(self._notifier.send, title, content)
+            self._notification_futures.append(future)
 
     def wait_for_notifications(self, timeout: float | None = None) -> None:
         """Wait for pending async notifications to finish sending."""
         with self._notification_lock:
-            threads = list(self._notification_threads)
-            self._notification_threads.clear()
+            futures = list(self._notification_futures)
+            executor = self._notification_executor
+            self._notification_futures.clear()
+            self._notification_executor = None
 
-        if timeout is None:
-            for thread in threads:
-                thread.join()
-            return
+        if futures:
+            wait(futures, timeout=timeout)
 
-        deadline = time.monotonic() + timeout
-        for thread in threads:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            thread.join(remaining)
+        if executor is not None:
+            executor.shutdown(wait=timeout is None)
 
     def run_monitoring_loop(
         self,
         course: CourseItem,
         course_type: str,
         is_stopped: Callable[[], bool],
-    ) -> bool:
+    ) -> MonitorOutcome:
         """Monitor a single course and attempt selection when available.
 
         Args:
@@ -137,7 +139,7 @@ class CourseSelector:
             is_stopped: Callable returning True when stop requested.
 
         Returns:
-            True if selection succeeded, False if session expired or stopped.
+            Monitoring outcome for this single target.
         """
         return self.run_group_monitoring_loop(
             course_name=course.name,
@@ -152,7 +154,7 @@ class CourseSelector:
         course_type: str,
         targets: Sequence[CourseItem],
         is_stopped: Callable[[], bool],
-    ) -> bool:
+    ) -> MonitorOutcome:
         """Monitor a course group with one shared query per polling cycle."""
         pending_targets = list(targets)
         teacher_names = ", ".join(target.teacher for target in pending_targets)
@@ -170,15 +172,19 @@ class CourseSelector:
                 courses = self._api.query_courses(course_name, course_type)
 
                 if not courses:
-                    logger.debug("[%s] No courses found", course_name)
+                    self._debug_throttled(
+                        f"no_courses:{course_type}:{course_name}",
+                        "[%s] No courses found",
+                        course_name,
+                    )
                     if not self._wait_random(is_stopped):
-                        return False
+                        return MonitorOutcome.STOPPED
                     continue
 
                 remaining_targets: list[CourseItem] = []
                 for target in pending_targets:
                     if is_stopped():
-                        return False
+                        return MonitorOutcome.STOPPED
 
                     teacher_slots = self._api.find_courses_by_teacher(
                         courses,
@@ -186,7 +192,8 @@ class CourseSelector:
                     )
 
                     if not teacher_slots:
-                        logger.debug(
+                        self._debug_throttled(
+                            f"teacher_missing:{course_type}:{target.name}:{target.teacher}",
                             "[%s] Teacher not found: %s",
                             target.name,
                             target.teacher,
@@ -209,43 +216,43 @@ class CourseSelector:
                         remaining_targets.append(target)
 
                 if not remaining_targets:
-                    return True
+                    return MonitorOutcome.SUCCESS
 
                 pending_targets = remaining_targets
                 if not self._wait_random(is_stopped):
-                    return False
+                    return MonitorOutcome.STOPPED
                 fail_count = 0
 
             except SessionExpiredError:
                 logger.warning("[%s] Session expired", course_name)
-                return False
+                return MonitorOutcome.SESSION_EXPIRED
 
             except (NetworkError, CourseSelectionError) as exc:
                 if is_stopped():
-                    return False
+                    return MonitorOutcome.STOPPED
                 fail_count += 1
                 logger.warning("[%s] Error: %s (fail %d)", course_name, exc, fail_count)
 
                 if fail_count >= max_consecutive_failures:
                     logger.error("[%s] Too many failures, stopping", course_name)
-                    return False
+                    return MonitorOutcome.FAILED
 
                 if not self._wait_with_stop(5, is_stopped):
-                    return False
+                    return MonitorOutcome.STOPPED
 
             except Exception as exc:
                 if is_stopped():
-                    return False
+                    return MonitorOutcome.STOPPED
                 fail_count += 1
                 logger.error("[%s] Unexpected error: %s", course_name, exc)
 
                 if fail_count >= max_consecutive_failures:
-                    return False
+                    return MonitorOutcome.FAILED
 
                 if not self._wait_with_stop(5, is_stopped):
-                    return False
+                    return MonitorOutcome.STOPPED
 
-        return False
+        return MonitorOutcome.STOPPED if is_stopped() else MonitorOutcome.FAILED
 
     def _try_select_available_slots(
         self,
@@ -295,7 +302,8 @@ class CourseSelector:
         """Log that all matched slots are full."""
         total_capacity = sum(slot.capacity for slot in teacher_slots)
         total_selected = sum(slot.selected_count for slot in teacher_slots)
-        logger.info(
+        self._debug_throttled(
+            f"full:{course.name}:{course.teacher}",
             "[%s] %s full (%d/%d) across %d slot(s) %s",
             course.name,
             course.teacher,
@@ -304,6 +312,15 @@ class CourseSelector:
             len(teacher_slots),
             time.strftime("%H:%M:%S"),
         )
+
+    def _debug_throttled(self, key: str, message: str, *args: object) -> None:
+        """Emit repetitive hot-path debug logs at a limited frequency."""
+        now = time.monotonic()
+        last = self._hot_path_log_times.get(key)
+        if last is not None and now - last < self.HOT_PATH_LOG_INTERVAL:
+            return
+        self._hot_path_log_times[key] = now
+        logger.debug(message, *args)
 
     def _wait_random(self, is_stopped: Callable[[], bool]) -> bool:
         """Wait for a random interval within configured bounds."""

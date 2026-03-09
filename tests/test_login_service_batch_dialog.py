@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 
 from ynu_xk_spider.config import AppSettings
 from ynu_xk_spider.domain.services.login import LoginService
+from ynu_xk_spider.exceptions import StopRequestedError
 
 
 class _DummyBrowser:
@@ -25,11 +29,11 @@ class _DummySolver:
 
 
 class _ImmediateWait:
-    def __init__(self, driver: "_FakeDriver", timeout: int) -> None:
+    def __init__(self, driver: _FakeDriver, timeout: int) -> None:
         self.driver = driver
         self.timeout = timeout
 
-    def until(self, condition: Callable[["_FakeDriver"], object]) -> object:
+    def until(self, condition: Callable[[_FakeDriver], object]) -> object:
         try:
             result = condition(self.driver)
         except NoSuchElementException:
@@ -232,3 +236,29 @@ def test_open_course_selection_page_retries_when_course_button_missing(monkeypat
 
     assert service._open_course_selection_page(driver) is False
     assert driver.find_attempts == service.MAX_START_BUTTON_ATTEMPTS
+
+
+def test_wait_or_stop_is_interruptible() -> None:
+    stop_event = threading.Event()
+    settings = AppSettings(student_code="20230001", password="secret")
+    service = LoginService(
+        settings,
+        _DummyBrowser(),
+        _DummySolver(),
+        is_stopped=stop_event.is_set,
+    )
+
+    def _trigger_stop() -> None:
+        time.sleep(0.05)
+        stop_event.set()
+
+    stopper = threading.Thread(target=_trigger_stop)
+    stopper.start()
+
+    start = time.perf_counter()
+    with pytest.raises(StopRequestedError):
+        service._wait_or_stop(1.0)
+    elapsed = time.perf_counter() - start
+    stopper.join()
+
+    assert elapsed < 0.5

@@ -4,7 +4,7 @@ import threading
 import time
 
 from ynu_xk_spider.config import AppSettings, CourseItem
-from ynu_xk_spider.domain.models import CourseInfo, SelectionResult
+from ynu_xk_spider.domain.models import CourseInfo, MonitorOutcome, SelectionResult
 from ynu_xk_spider.domain.services.course_selector import CourseSelector
 
 
@@ -70,7 +70,7 @@ def test_notifications_are_async_and_flushed_on_wait() -> None:
     result = selector.run_monitoring_loop(course, "素选", is_stopped=lambda: False)
     elapsed = time.perf_counter() - start
 
-    assert result is True
+    assert result is MonitorOutcome.SUCCESS
     assert elapsed < 0.2
 
     selector.wait_for_notifications()
@@ -93,7 +93,7 @@ def test_group_monitoring_queries_once_for_multiple_teachers() -> None:
         is_stopped=lambda: False,
     )
 
-    assert result is True
+    assert result is MonitorOutcome.SUCCESS
     assert api.query_count == 1
 
 
@@ -127,5 +127,5 @@ def test_monitoring_wait_is_interruptible() -> None:
     elapsed = time.perf_counter() - start
     stopper.join()
 
-    assert result is False
+    assert result is MonitorOutcome.STOPPED
     assert elapsed < 0.5

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
@@ -16,7 +17,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
-from ...exceptions import CaptchaError, LoginError
+from ...exceptions import CaptchaError, LoginError, StopRequestedError
 from ..models import SessionData
 
 if TYPE_CHECKING:
@@ -53,6 +54,7 @@ class LoginService:
         settings: AppSettings,
         browser: BrowserManager,
         solver: CaptchaSolver,
+        is_stopped: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize login service.
 
@@ -60,10 +62,12 @@ class LoginService:
             settings: Application settings.
             browser: Browser manager for WebDriver access.
             solver: Captcha solver instance.
+            is_stopped: Optional callback indicating whether shutdown was requested.
         """
         self._settings = settings
         self._browser = browser
         self._solver = solver
+        self._is_stopped = is_stopped or (lambda: False)
 
     def login(self) -> SessionData:
         """Perform login and return session data.
@@ -80,17 +84,17 @@ class LoginService:
         try:
             logger.info("Opening login page: %s", self._settings.base_url)
             driver.get(self._settings.base_url)
-            time.sleep(2)
+            self._wait_or_stop(2)
 
             if not self._perform_login(driver):
                 raise LoginError("Login failed after maximum attempts")
 
-            time.sleep(1)
+            self._wait_or_stop(1)
             self._navigate_to_course_selection(driver)
 
             return self._extract_session_data(driver)
 
-        except (LoginError, CaptchaError):
+        except (LoginError, CaptchaError, StopRequestedError):
             raise
         except Exception as exc:
             logger.error("Login error: %s", exc)
@@ -107,14 +111,16 @@ class LoginService:
         """
         for attempt in range(self.MAX_LOGIN_ATTEMPTS):
             try:
-                WebDriverWait(driver, 10).until(
+                self._wait_until(
+                    driver,
+                    10,
                     EC.presence_of_element_located((By.ID, "vcodeImg"))
                 )
                 img_tag = driver.find_element(By.ID, "vcodeImg")
 
                 if not img_tag.get_attribute("src"):
                     driver.refresh()
-                    time.sleep(2)
+                    self._wait_or_stop(2)
                     continue
 
                 img_bytes = img_tag.screenshot_as_png
@@ -124,7 +130,7 @@ class LoginService:
                 except CaptchaError as e:
                     logger.warning("Captcha solve failed: %s, refreshing", e)
                     img_tag.click()
-                    time.sleep(2)
+                    self._wait_or_stop(2)
                     continue
 
                 logger.debug("Attempt %d: captcha=%s", attempt + 1, captcha_code)
@@ -140,12 +146,12 @@ class LoginService:
                 elif result == "auth_error":
                     raise LoginError("Invalid username or password")
 
-            except (LoginError, CaptchaError):
+            except (LoginError, CaptchaError, StopRequestedError):
                 raise
             except Exception as exc:
                 logger.warning("Login attempt %d failed: %s", attempt + 1, exc)
                 driver.refresh()
-                time.sleep(3)
+                self._wait_or_stop(3)
 
         return False
 
@@ -159,17 +165,17 @@ class LoginService:
         user_ele = driver.find_element(By.ID, "loginName")
         user_ele.clear()
         user_ele.send_keys(self._settings.student_code)
-        time.sleep(self.INPUT_DELAY)
+        self._wait_or_stop(self.INPUT_DELAY)
 
         pwd_ele = driver.find_element(By.ID, "loginPwd")
         pwd_ele.clear()
         pwd_ele.send_keys(self._settings.password.get_secret_value())
-        time.sleep(self.INPUT_DELAY)
+        self._wait_or_stop(self.INPUT_DELAY)
 
         code_ele = driver.find_element(By.ID, "verifyCode")
         code_ele.clear()
         code_ele.send_keys(captcha_code)
-        time.sleep(self.INPUT_DELAY)
+        self._wait_or_stop(self.INPUT_DELAY)
 
     def _submit_and_check(self, driver: WebDriver, img_tag: WebElement) -> str:
         """Submit login form and check result.
@@ -188,7 +194,7 @@ class LoginService:
             except Exception:
                 pass
 
-            time.sleep(self.CLICK_DELAY)
+            self._wait_or_stop(self.CLICK_DELAY)
 
             try:
                 err_ele = driver.find_element(By.ID, "errorMsg")
@@ -196,7 +202,7 @@ class LoginService:
                     if "验证码" in err_ele.text:
                         logger.warning("Captcha error detected")
                         img_tag.click()
-                        time.sleep(2)
+                        self._wait_or_stop(2)
                         return "captcha_error"
                     elif "认证失败" in err_ele.text or "密码" in err_ele.text:
                         return "auth_error"
@@ -217,7 +223,7 @@ class LoginService:
             logger.debug("Click %d: no response, retrying", click_i + 1)
 
         driver.refresh()
-        time.sleep(3)
+        self._wait_or_stop(3)
         return "unknown"
 
     def _navigate_to_course_selection(self, driver: WebDriver) -> None:
@@ -231,12 +237,14 @@ class LoginService:
         """
         try:
             enter_xpath = '//button[@class="bh-btn cv-btn bh-btn-primary bh-pull-right"]'
-            WebDriverWait(driver, 8).until(
+            self._wait_until(
+                driver,
+                8,
                 EC.presence_of_element_located((By.XPATH, enter_xpath))
             )
             driver.find_element(By.XPATH, enter_xpath).click()
             logger.info("Clicked entry button")
-            time.sleep(1)
+            self._wait_or_stop(1)
         except TimeoutException:
             logger.debug("Entry button not found, may already be on next page")
 
@@ -244,7 +252,9 @@ class LoginService:
         self._handle_generic_confirmation_dialog(driver)
 
         try:
-            WebDriverWait(driver, 20).until(
+            self._wait_until(
+                driver,
+                20,
                 EC.presence_of_element_located((By.ID, "courseBtn"))
             )
         except TimeoutException as err:
@@ -253,7 +263,7 @@ class LoginService:
         if not self._open_course_selection_page(driver):
             raise LoginError("Failed to open course selection page after clicking courseBtn")
 
-        time.sleep(2)
+        self._wait_or_stop(2)
 
     def _handle_batch_selection_dialog(self, driver: WebDriver) -> None:
         """Handle elective batch dialog, including acknowledgement checkbox.
@@ -270,7 +280,9 @@ class LoginService:
         ack_css = 'input#tyxz-input, input[name="tyxz"]'
 
         try:
-            WebDriverWait(driver, 5).until(
+            self._wait_until(
+                driver,
+                5,
                 EC.presence_of_element_located((By.CSS_SELECTOR, radio_css))
             )
         except TimeoutException:
@@ -288,7 +300,7 @@ class LoginService:
 
         if not target_radio.is_selected():
             self._safe_click(driver, target_radio)
-            time.sleep(0.3)
+            self._wait_or_stop(0.3)
             if not target_radio.is_selected():
                 raise LoginError("Failed to select elective batch radio")
         logger.info("Selected elective batch")
@@ -304,7 +316,7 @@ class LoginService:
         )
         if ack_checkbox is not None and not ack_checkbox.is_selected():
             self._safe_click(driver, ack_checkbox)
-            time.sleep(0.2)
+            self._wait_or_stop(0.2)
             logger.info("Checked batch acknowledgement checkbox")
 
         confirm_buttons = driver.find_elements(By.XPATH, confirm_xpath)
@@ -319,7 +331,9 @@ class LoginService:
         logger.info("Confirmed elective batch dialog")
 
         try:
-            WebDriverWait(driver, 8).until(
+            self._wait_until(
+                driver,
+                8,
                 lambda d: bool(d.find_elements(By.ID, "courseBtn"))
                 or not d.find_elements(By.CSS_SELECTOR, radio_css)
             )
@@ -334,7 +348,9 @@ class LoginService:
         )
         for retry in range(3):
             try:
-                WebDriverWait(driver, 5).until(
+                self._wait_until(
+                    driver,
+                    5,
                     EC.presence_of_element_located((By.XPATH, ok_xpath))
                 )
                 ok_elements = driver.find_elements(By.XPATH, ok_xpath)
@@ -349,11 +365,11 @@ class LoginService:
                 if ok_ele is not None:
                     self._safe_click(driver, ok_ele)
                     logger.info("Clicked confirmation dialog")
-                    time.sleep(1)
+                    self._wait_or_stop(1)
                     break
             except TimeoutException:
                 if retry < 2:
-                    time.sleep(1)
+                    self._wait_or_stop(1)
 
     def _pick_selectable_batch_radio(
         self,
@@ -452,7 +468,7 @@ class LoginService:
                     attempt + 1,
                     self.MAX_START_BUTTON_ATTEMPTS,
                 )
-                time.sleep(1)
+                self._wait_or_stop(1)
                 continue
             self._safe_click(driver, start_ele)
             logger.info("Clicked courseBtn (attempt %d)", attempt + 1)
@@ -465,14 +481,16 @@ class LoginService:
                 attempt + 1,
                 self.MAX_START_BUTTON_ATTEMPTS,
             )
-            time.sleep(1)
+            self._wait_or_stop(1)
 
         return False
 
     def _wait_course_page_ready(self, driver: WebDriver, timeout: int) -> bool:
         """Check if we have successfully entered the course selection page."""
         try:
-            WebDriverWait(driver, timeout).until(
+            self._wait_until(
+                driver,
+                timeout,
                 lambda d: (
                     bool(d.find_elements(By.ID, "aPublicCourse"))
                     or bool(
@@ -484,6 +502,39 @@ class LoginService:
             return True
         except TimeoutException:
             return False
+
+    def _wait_until(
+        self,
+        driver: WebDriver,
+        timeout: float,
+        condition: Callable[[WebDriver], object],
+    ) -> object:
+        """Wait for a Selenium condition while allowing stop interruption."""
+        deadline = time.monotonic() + timeout
+        while True:
+            self._ensure_not_stopped()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutException()
+            try:
+                return WebDriverWait(driver, min(0.2, remaining)).until(condition)
+            except TimeoutException:
+                continue
+
+    def _wait_or_stop(self, delay: float) -> None:
+        """Sleep in short slices and abort when stop is requested."""
+        deadline = time.monotonic() + delay
+        while True:
+            self._ensure_not_stopped()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.1, remaining))
+
+    def _ensure_not_stopped(self) -> None:
+        """Raise when a stop request has been observed."""
+        if self._is_stopped():
+            raise StopRequestedError("Stop requested")
 
     def _extract_session_data(self, driver: WebDriver) -> SessionData:
         """Extract authentication data from browser session.
