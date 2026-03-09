@@ -71,6 +71,9 @@ def test_http_client_uses_thread_local_sessions(monkeypatch: pytest.MonkeyPatch)
     assert refreshed_session.headers["Token"] == "token-2"
     assert refreshed_session.cookies.values["SESSION"] == "xyz"
     assert len(created_sessions) == 3
+    assert main_session.closed is True
+    assert main_session not in client._sessions
+    assert len(client._sessions) == 2
 
 
 def test_http_client_retry_backoff_is_interruptible(monkeypatch: pytest.MonkeyPatch) -> None:

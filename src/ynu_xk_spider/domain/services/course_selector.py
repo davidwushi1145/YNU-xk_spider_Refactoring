@@ -157,6 +157,9 @@ class CourseSelector:
     ) -> MonitorOutcome:
         """Monitor a course group with one shared query per polling cycle."""
         pending_targets = list(targets)
+        if not pending_targets:
+            return MonitorOutcome.SUCCESS
+
         teacher_names = ", ".join(target.teacher for target in pending_targets)
         logger.info(
             "Starting monitor: [%s] teachers=%s",
@@ -182,38 +185,42 @@ class CourseSelector:
                     continue
 
                 remaining_targets: list[CourseItem] = []
-                for target in pending_targets:
-                    if is_stopped():
-                        return MonitorOutcome.STOPPED
+                for index, target in enumerate(pending_targets):
+                    try:
+                        if is_stopped():
+                            return MonitorOutcome.STOPPED
 
-                    teacher_slots = self._api.find_courses_by_teacher(
-                        courses,
-                        target.teacher,
-                    )
-
-                    if not teacher_slots:
-                        self._debug_throttled(
-                            f"teacher_missing:{course_type}:{target.name}:{target.teacher}",
-                            "[%s] Teacher not found: %s",
-                            target.name,
+                        teacher_slots = self._api.find_courses_by_teacher(
+                            courses,
                             target.teacher,
                         )
-                        remaining_targets.append(target)
-                        continue
 
-                    available_slots = [slot for slot in teacher_slots if slot.has_spots]
+                        if not teacher_slots:
+                            self._debug_throttled(
+                                f"teacher_missing:{course_type}:{target.name}:{target.teacher}",
+                                "[%s] Teacher not found: %s",
+                                target.name,
+                                target.teacher,
+                            )
+                            remaining_targets.append(target)
+                            continue
 
-                    if not available_slots:
-                        self._log_full_slots(target, teacher_slots)
-                        remaining_targets.append(target)
-                        continue
+                        available_slots = [slot for slot in teacher_slots if slot.has_spots]
 
-                    if not self._try_select_available_slots(
-                        target,
-                        course_type,
-                        available_slots,
-                    ):
-                        remaining_targets.append(target)
+                        if not available_slots:
+                            self._log_full_slots(target, teacher_slots)
+                            remaining_targets.append(target)
+                            continue
+
+                        if not self._try_select_available_slots(
+                            target,
+                            course_type,
+                            available_slots,
+                        ):
+                            remaining_targets.append(target)
+                    except Exception:
+                        pending_targets = remaining_targets + pending_targets[index:]
+                        raise
 
                 if not remaining_targets:
                     return MonitorOutcome.SUCCESS
@@ -228,31 +235,59 @@ class CourseSelector:
                 return MonitorOutcome.SESSION_EXPIRED
 
             except (NetworkError, CourseSelectionError) as exc:
-                if is_stopped():
-                    return MonitorOutcome.STOPPED
-                fail_count += 1
-                logger.warning("[%s] Error: %s (fail %d)", course_name, exc, fail_count)
-
-                if fail_count >= max_consecutive_failures:
-                    logger.error("[%s] Too many failures, stopping", course_name)
-                    return MonitorOutcome.FAILED
-
-                if not self._wait_with_stop(5, is_stopped):
-                    return MonitorOutcome.STOPPED
+                fail_count, outcome = self._handle_monitoring_failure(
+                    course_name=course_name,
+                    exc=exc,
+                    fail_count=fail_count,
+                    max_consecutive_failures=max_consecutive_failures,
+                    is_stopped=is_stopped,
+                    log_method=logger.warning,
+                    log_message="[%s] Error: %s (fail %d)",
+                )
+                if outcome is not None:
+                    return outcome
 
             except Exception as exc:
-                if is_stopped():
-                    return MonitorOutcome.STOPPED
-                fail_count += 1
-                logger.error("[%s] Unexpected error: %s", course_name, exc)
-
-                if fail_count >= max_consecutive_failures:
-                    return MonitorOutcome.FAILED
-
-                if not self._wait_with_stop(5, is_stopped):
-                    return MonitorOutcome.STOPPED
+                fail_count, outcome = self._handle_monitoring_failure(
+                    course_name=course_name,
+                    exc=exc,
+                    fail_count=fail_count,
+                    max_consecutive_failures=max_consecutive_failures,
+                    is_stopped=is_stopped,
+                    log_method=logger.error,
+                    log_message="[%s] Unexpected error: %s (fail %d)",
+                )
+                if outcome is not None:
+                    return outcome
 
         return MonitorOutcome.STOPPED if is_stopped() else MonitorOutcome.FAILED
+
+    def _handle_monitoring_failure(
+        self,
+        course_name: str,
+        exc: Exception,
+        fail_count: int,
+        max_consecutive_failures: int,
+        is_stopped: Callable[[], bool],
+        *,
+        log_method: Callable[..., None],
+        log_message: str,
+    ) -> tuple[int, MonitorOutcome | None]:
+        """Handle a failed monitoring attempt and decide whether to retry."""
+        if is_stopped():
+            return fail_count, MonitorOutcome.STOPPED
+
+        fail_count += 1
+        log_method(log_message, course_name, exc, fail_count)
+
+        if fail_count >= max_consecutive_failures:
+            logger.error("[%s] Too many failures, stopping", course_name)
+            return fail_count, MonitorOutcome.FAILED
+
+        if not self._wait_with_stop(5, is_stopped):
+            return fail_count, MonitorOutcome.STOPPED
+
+        return fail_count, None
 
     def _try_select_available_slots(
         self,

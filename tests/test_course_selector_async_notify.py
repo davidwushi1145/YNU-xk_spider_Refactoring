@@ -3,9 +3,12 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from ynu_xk_spider.config import AppSettings, CourseItem
 from ynu_xk_spider.domain.models import CourseInfo, MonitorOutcome, SelectionResult
 from ynu_xk_spider.domain.services.course_selector import CourseSelector
+from ynu_xk_spider.exceptions import CourseSelectionError, NetworkError
 
 
 class _SlowNotifier:
@@ -59,6 +62,28 @@ class _FakeApi:
         )
 
 
+class _FailingQueryApi(_FakeApi):
+    def __init__(self, exc: Exception) -> None:
+        super().__init__()
+        self._exc = exc
+
+    def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+        self.query_count += 1
+        raise self._exc
+
+
+class _PartialFailureApi(_FakeApi):
+    def __init__(self) -> None:
+        super().__init__()
+        self.selection_attempts: dict[str, int] = {"Prof. Li": 0, "Prof. Wang": 0}
+
+    def select_course(self, course: CourseInfo, course_type: str) -> SelectionResult:
+        self.selection_attempts[course.teacher_name] += 1
+        if course.teacher_name == "Prof. Wang" and self.selection_attempts[course.teacher_name] == 1:
+            raise NetworkError("temporary selection failure")
+        return super().select_course(course, course_type)
+
+
 def test_notifications_are_async_and_flushed_on_wait() -> None:
     settings = AppSettings(student_code="20230001", password="secret")
     notifier = _SlowNotifier()
@@ -97,6 +122,22 @@ def test_group_monitoring_queries_once_for_multiple_teachers() -> None:
     assert api.query_count == 1
 
 
+def test_group_monitoring_with_empty_targets_is_success() -> None:
+    settings = AppSettings(student_code="20230001", password="secret")
+    api = _FakeApi()
+    selector = CourseSelector(api=api, settings=settings)
+
+    result = selector.run_group_monitoring_loop(
+        course_name="Linear Algebra",
+        course_type="素选",
+        targets=[],
+        is_stopped=lambda: False,
+    )
+
+    assert result is MonitorOutcome.SUCCESS
+    assert api.query_count == 0
+
+
 def test_monitoring_wait_is_interruptible() -> None:
     settings = AppSettings(
         student_code="20230001",
@@ -129,3 +170,64 @@ def test_monitoring_wait_is_interruptible() -> None:
 
     assert result is MonitorOutcome.STOPPED
     assert elapsed < 0.5
+
+
+@pytest.mark.parametrize(
+    "raised_exc",
+    [
+        NetworkError("network down"),
+        CourseSelectionError("selection failed"),
+        RuntimeError("unexpected failure"),
+    ],
+)
+def test_monitoring_retries_failures_until_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    raised_exc: Exception,
+) -> None:
+    settings = AppSettings(student_code="20230001", password="secret")
+    api = _FailingQueryApi(raised_exc)
+    selector = CourseSelector(api=api, settings=settings)
+    course = CourseItem(name="Linear Algebra", teacher="Prof. Li")
+    wait_delays: list[float] = []
+
+    monkeypatch.setattr(
+        selector,
+        "_wait_with_stop",
+        lambda delay, is_stopped: wait_delays.append(delay) or True,
+    )
+
+    result = selector.run_monitoring_loop(course, "素选", is_stopped=lambda: False)
+
+    assert result is MonitorOutcome.FAILED
+    assert api.query_count == 5
+    assert wait_delays == [5, 5, 5, 5]
+
+
+def test_group_monitoring_preserves_successful_targets_across_target_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AppSettings(student_code="20230001", password="secret")
+    api = _PartialFailureApi()
+    selector = CourseSelector(api=api, settings=settings)
+    wait_delays: list[float] = []
+
+    monkeypatch.setattr(
+        selector,
+        "_wait_with_stop",
+        lambda delay, is_stopped: wait_delays.append(delay) or True,
+    )
+
+    result = selector.run_group_monitoring_loop(
+        course_name="Linear Algebra",
+        course_type="素选",
+        targets=[
+            CourseItem(name="Linear Algebra", teacher="Prof. Li"),
+            CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
+        ],
+        is_stopped=lambda: False,
+    )
+
+    assert result is MonitorOutcome.SUCCESS
+    assert api.query_count == 2
+    assert api.selection_attempts == {"Prof. Li": 1, "Prof. Wang": 2}
+    assert wait_delays == [5]

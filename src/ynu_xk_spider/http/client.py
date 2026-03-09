@@ -38,7 +38,8 @@ class HttpClient:
     - Session expiration detection
 
     Attributes:
-        _session: Underlying requests.Session.
+        _thread_local: Per-thread session state storage.
+        _sessions: Registry of active sessions for coordinated shutdown.
         _timeout: Default request timeout.
         _settings: Application settings reference.
     """
@@ -103,6 +104,14 @@ class HttpClient:
             self._sessions.append(session)
         return session
 
+    def _discard_session(self, session: requests.Session) -> None:
+        """Remove a session from shutdown tracking if it is no longer current."""
+        with self._sessions_lock:
+            try:
+                self._sessions.remove(session)
+            except ValueError:
+                return
+
     def _get_session(self) -> requests.Session:
         """Get a thread-local session for the current auth generation."""
         with self._auth_lock:
@@ -115,6 +124,7 @@ class HttpClient:
             return state.session
 
         if isinstance(state, _ThreadSessionState):
+            self._discard_session(state.session)
             try:
                 state.session.close()
             except Exception:
