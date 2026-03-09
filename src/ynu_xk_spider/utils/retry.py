@@ -20,6 +20,7 @@ def retry(
     backoff: float = 2.0,
     jitter: float = 0.1,
     logger: logging.Logger | None = None,
+    sleep: Callable[[float], bool] | None = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Retry decorator with exponential backoff and jitter.
 
@@ -30,6 +31,8 @@ def retry(
         backoff: Multiplier applied to delay after each failure.
         jitter: Random jitter range (+/-) added to delay.
         logger: Optional logger for warning messages.
+        sleep: Optional sleep function. Returns True if the full delay elapsed,
+            False if the wait was interrupted and retrying should stop.
 
     Returns:
         Decorated function with retry behavior.
@@ -58,6 +61,7 @@ def retry(
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             remaining = tries
             current_delay = delay
+            sleep_func = sleep or _default_sleep
 
             while remaining > 1:
                 try:
@@ -72,7 +76,8 @@ def retry(
                             wait,
                             remaining - 1,
                         )
-                    time.sleep(wait)
+                    if not sleep_func(wait):
+                        raise exc
                     remaining -= 1
                     current_delay *= backoff
 
@@ -81,3 +86,9 @@ def retry(
         return wrapper
 
     return decorator
+
+
+def _default_sleep(delay: float) -> bool:
+    """Sleep for the requested delay and report completion."""
+    time.sleep(delay)
+    return True

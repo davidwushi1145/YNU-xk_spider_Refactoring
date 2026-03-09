@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 
 from ynu_xk_spider.browser.manager import BrowserManager
-from ynu_xk_spider.config import AppSettings
+from ynu_xk_spider.config import AppSettings, CourseItem, CoursesConfig
 from ynu_xk_spider.exceptions import LoginError
 from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
 
@@ -37,9 +37,42 @@ def test_run_loop_stops_after_repeated_login_failures(
         raise LoginError("bad credentials")
 
     monkeypatch.setattr(spider, "_perform_login", _always_fail_login)
-    monkeypatch.setattr("ynu_xk_spider.spiders.ynu_spider.time.sleep", lambda _: None)
+    monkeypatch.setattr(spider, "_wait_or_stop", lambda _: True)
 
     spider.run_loop()
 
     assert attempts["count"] == spider.MAX_CONSECUTIVE_LOGIN_FAILURES
     assert spider.is_stopped()
+
+
+def test_group_course_targets_merges_same_name_and_type() -> None:
+    settings = AppSettings(
+        student_code="20230001",
+        password="secret",
+        courses=CoursesConfig(
+            public=[
+                CourseItem(name="Linear Algebra", teacher="Prof. Li"),
+                CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
+            ],
+            pe=[CourseItem(name="Swimming", teacher="Coach Lin")],
+        ),
+    )
+    spider = YnuCourseSpider(settings)
+
+    grouped = spider._group_course_targets(settings.courses.all_courses)
+
+    assert grouped == [
+        (
+            "Linear Algebra",
+            "素选",
+            [
+                CourseItem(name="Linear Algebra", teacher="Prof. Li"),
+                CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
+            ],
+        ),
+        (
+            "Swimming",
+            "体育",
+            [CourseItem(name="Swimming", teacher="Coach Lin")],
+        ),
+    ]

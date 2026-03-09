@@ -6,7 +6,7 @@ import logging
 import random
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 import requests  # type: ignore[import-untyped]
@@ -15,6 +15,7 @@ from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredErro
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
+    from ..models import CourseInfo
     from .course_api import CourseApiClient
 
 logger = logging.getLogger(__name__)
@@ -138,110 +139,190 @@ class CourseSelector:
         Returns:
             True if selection succeeded, False if session expired or stopped.
         """
-        logger.info("Starting monitor: [%s] - %s", course.name, course.teacher)
+        return self.run_group_monitoring_loop(
+            course_name=course.name,
+            course_type=course_type,
+            targets=[course],
+            is_stopped=is_stopped,
+        )
+
+    def run_group_monitoring_loop(
+        self,
+        course_name: str,
+        course_type: str,
+        targets: Sequence[CourseItem],
+        is_stopped: Callable[[], bool],
+    ) -> bool:
+        """Monitor a course group with one shared query per polling cycle."""
+        pending_targets = list(targets)
+        teacher_names = ", ".join(target.teacher for target in pending_targets)
+        logger.info(
+            "Starting monitor: [%s] teachers=%s",
+            course_name,
+            teacher_names,
+        )
 
         fail_count = 0
         max_consecutive_failures = 5
 
-        while not is_stopped():
+        while pending_targets and not is_stopped():
             try:
-                courses = self._api.query_courses(course.name, course_type)
+                courses = self._api.query_courses(course_name, course_type)
 
                 if not courses:
-                    logger.debug("[%s] No courses found", course.name)
-                    self._wait_random()
+                    logger.debug("[%s] No courses found", course_name)
+                    if not self._wait_random(is_stopped):
+                        return False
                     continue
 
-                # Find all time slots for this teacher
-                targets = self._api.find_courses_by_teacher(courses, course.teacher)
+                remaining_targets: list[CourseItem] = []
+                for target in pending_targets:
+                    if is_stopped():
+                        return False
 
-                if not targets:
-                    logger.debug("[%s] Teacher not found: %s", course.name, course.teacher)
-                    self._wait_random()
-                    continue
-
-                # Try each available time slot
-                available_slots = [t for t in targets if t.has_spots]
-
-                if available_slots:
-                    logger.info(
-                        "Found %d available slot(s) for [%s] %s",
-                        len(available_slots),
-                        course.name,
-                        course.teacher,
+                    teacher_slots = self._api.find_courses_by_teacher(
+                        courses,
+                        target.teacher,
                     )
 
-                    for slot in available_slots:
-                        msg = f"Found spot! {course.name}-{course.teacher} remaining: {slot.remaining}"
-                        logger.info(msg)
-                        self._notify_async("Course Alert", msg)
+                    if not teacher_slots:
+                        logger.debug(
+                            "[%s] Teacher not found: %s",
+                            target.name,
+                            target.teacher,
+                        )
+                        remaining_targets.append(target)
+                        continue
 
-                        result = self._api.select_course(slot, course_type)
+                    available_slots = [slot for slot in teacher_slots if slot.has_spots]
 
-                        if result.success:
-                            success_msg = f"Selection successful: {course.name}"
-                            logger.info(success_msg)
-                            self._notify_async("Selection Success", success_msg)
-                            return True
+                    if not available_slots:
+                        self._log_full_slots(target, teacher_slots)
+                        remaining_targets.append(target)
+                        continue
 
-                        # Handle common failure cases and continue to next slot
-                        if "时间冲突" in result.message or "该课程与已选课程时间冲突" in result.message:
-                            logger.info("[%s] Time conflict, trying next slot", course.name)
-                            continue
+                    if not self._try_select_available_slots(
+                        target,
+                        course_type,
+                        available_slots,
+                    ):
+                        remaining_targets.append(target)
 
-                        if "人数已满" in result.message or "已满" in result.message:
-                            logger.debug("[%s] Slot full, trying next slot", course.name)
-                            continue
+                if not remaining_targets:
+                    return True
 
-                        # For other errors, log and continue
-                        logger.warning("[%s] Selection failed: %s", course.name, result.message)
-                        break
-                else:
-                    # Log once for all full slots
-                    total_capacity = sum(t.capacity for t in targets)
-                    total_selected = sum(t.selected_count for t in targets)
-                    logger.info(
-                        "[%s] %s full (%d/%d) across %d slot(s) %s",
-                        course.name,
-                        course.teacher,
-                        total_selected,
-                        total_capacity,
-                        len(targets),
-                        time.strftime("%H:%M:%S"),
-                    )
-
-                self._wait_random()
+                pending_targets = remaining_targets
+                if not self._wait_random(is_stopped):
+                    return False
                 fail_count = 0
 
             except SessionExpiredError:
-                logger.warning("[%s] Session expired", course.name)
+                logger.warning("[%s] Session expired", course_name)
                 return False
 
             except (NetworkError, CourseSelectionError) as exc:
+                if is_stopped():
+                    return False
                 fail_count += 1
-                logger.warning("[%s] Error: %s (fail %d)", course.name, exc, fail_count)
+                logger.warning("[%s] Error: %s (fail %d)", course_name, exc, fail_count)
 
                 if fail_count >= max_consecutive_failures:
-                    logger.error("[%s] Too many failures, stopping", course.name)
+                    logger.error("[%s] Too many failures, stopping", course_name)
                     return False
 
-                time.sleep(5)
+                if not self._wait_with_stop(5, is_stopped):
+                    return False
 
             except Exception as exc:
+                if is_stopped():
+                    return False
                 fail_count += 1
-                logger.error("[%s] Unexpected error: %s", course.name, exc)
+                logger.error("[%s] Unexpected error: %s", course_name, exc)
 
                 if fail_count >= max_consecutive_failures:
                     return False
 
-                time.sleep(5)
+                if not self._wait_with_stop(5, is_stopped):
+                    return False
 
-        return True
+        return False
 
-    def _wait_random(self) -> None:
+    def _try_select_available_slots(
+        self,
+        course: CourseItem,
+        course_type: str,
+        available_slots: Sequence[CourseInfo],
+    ) -> bool:
+        """Try selecting the target from available slots."""
+        logger.info(
+            "Found %d available slot(s) for [%s] %s",
+            len(available_slots),
+            course.name,
+            course.teacher,
+        )
+
+        for slot in available_slots:
+            msg = f"Found spot! {course.name}-{course.teacher} remaining: {slot.remaining}"
+            logger.info(msg)
+            self._notify_async("Course Alert", msg)
+
+            result = self._api.select_course(slot, course_type)
+
+            if result.success:
+                success_msg = f"Selection successful: {course.name}"
+                logger.info(success_msg)
+                self._notify_async("Selection Success", success_msg)
+                return True
+
+            if "时间冲突" in result.message or "该课程与已选课程时间冲突" in result.message:
+                logger.info("[%s] Time conflict, trying next slot", course.name)
+                continue
+
+            if "人数已满" in result.message or "已满" in result.message:
+                logger.debug("[%s] Slot full, trying next slot", course.name)
+                continue
+
+            logger.warning("[%s] Selection failed: %s", course.name, result.message)
+            break
+
+        return False
+
+    def _log_full_slots(
+        self,
+        course: CourseItem,
+        teacher_slots: Sequence[CourseInfo],
+    ) -> None:
+        """Log that all matched slots are full."""
+        total_capacity = sum(slot.capacity for slot in teacher_slots)
+        total_selected = sum(slot.selected_count for slot in teacher_slots)
+        logger.info(
+            "[%s] %s full (%d/%d) across %d slot(s) %s",
+            course.name,
+            course.teacher,
+            total_selected,
+            total_capacity,
+            len(teacher_slots),
+            time.strftime("%H:%M:%S"),
+        )
+
+    def _wait_random(self, is_stopped: Callable[[], bool]) -> bool:
         """Wait for a random interval within configured bounds."""
         interval = random.uniform(
             self._settings.poll_interval_min,
             self._settings.poll_interval_max,
         )
-        time.sleep(interval)
+        return self._wait_with_stop(interval, is_stopped)
+
+    def _wait_with_stop(
+        self,
+        delay: float,
+        is_stopped: Callable[[], bool],
+    ) -> bool:
+        """Sleep in short slices so stop requests can interrupt polling."""
+        deadline = time.monotonic() + delay
+        while not is_stopped():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(0.1, remaining))
+        return False
