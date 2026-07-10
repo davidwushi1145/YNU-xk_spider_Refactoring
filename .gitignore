@@ -6,3 +6,4 @@ logs/
 .selenium-cache/
 config.json
 **/__pycache__/
+.omc/

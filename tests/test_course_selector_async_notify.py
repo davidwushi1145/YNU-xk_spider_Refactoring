@@ -6,9 +6,16 @@ import time
 import pytest
 
 from ynu_xk_spider.config import AppSettings, CourseItem
-from ynu_xk_spider.domain.models import CourseInfo, MonitorOutcome, SelectionResult
+from ynu_xk_spider.domain.models import (
+    CourseInfo,
+    CourseType,
+    MonitorOutcome,
+    SelectionResult,
+)
 from ynu_xk_spider.domain.services.course_selector import CourseSelector
+from ynu_xk_spider.domain.services.notification import AsyncNotifier, ServerChanNotifier
 from ynu_xk_spider.exceptions import CourseSelectionError, NetworkError
+from ynu_xk_spider.utils.stop import StopToken
 
 
 class _SlowNotifier:
@@ -42,7 +49,7 @@ class _FakeApi:
             ),
         ]
 
-    def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+    def query_courses(self, course_name: str, course_type: CourseType) -> list[CourseInfo]:
         self.query_count += 1
         return self.slots
 
@@ -53,7 +60,7 @@ class _FakeApi:
     ) -> list[CourseInfo]:
         return [c for c in courses if teacher_name in c.teacher_name]
 
-    def select_course(self, course: CourseInfo, course_type: str) -> SelectionResult:
+    def select_course(self, course: CourseInfo, course_type: CourseType) -> SelectionResult:
         return SelectionResult(
             success=True,
             message="选课成功",
@@ -67,7 +74,7 @@ class _FailingQueryApi(_FakeApi):
         super().__init__()
         self._exc = exc
 
-    def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+    def query_courses(self, course_name: str, course_type: CourseType) -> list[CourseInfo]:
         self.query_count += 1
         raise self._exc
 
@@ -77,30 +84,73 @@ class _PartialFailureApi(_FakeApi):
         super().__init__()
         self.selection_attempts: dict[str, int] = {"Prof. Li": 0, "Prof. Wang": 0}
 
-    def select_course(self, course: CourseInfo, course_type: str) -> SelectionResult:
+    def select_course(self, course: CourseInfo, course_type: CourseType) -> SelectionResult:
         self.selection_attempts[course.teacher_name] += 1
         if course.teacher_name == "Prof. Wang" and self.selection_attempts[course.teacher_name] == 1:
             raise NetworkError("temporary selection failure")
         return super().select_course(course, course_type)
 
 
-def test_notifications_are_async_and_flushed_on_wait() -> None:
+def test_notifications_are_async_and_flushed() -> None:
     settings = AppSettings(student_code="20230001", password="secret")
-    notifier = _SlowNotifier()
+    inner = _SlowNotifier()
+    notifier = AsyncNotifier(inner)
     api = _FakeApi()
     selector = CourseSelector(api=api, settings=settings, notifier=notifier)
     course = CourseItem(name="Linear Algebra", teacher="Prof. Li")
 
     start = time.perf_counter()
-    result = selector.run_monitoring_loop(course, "素选", is_stopped=lambda: False)
+    result = selector.run_monitoring_loop(course, CourseType.PUBLIC, stop=StopToken())
     elapsed = time.perf_counter() - start
 
     assert result is MonitorOutcome.SUCCESS
     assert elapsed < 0.2
 
-    selector.wait_for_notifications()
-    assert len(notifier.messages) == 2
+    notifier.flush()
+    assert len(inner.messages) == 2
     assert api.query_count == 1
+
+
+def test_async_notifier_is_reusable_after_flush() -> None:
+    inner = _SlowNotifier()
+    notifier = AsyncNotifier(inner)
+
+    notifier.send("first", "1")
+    notifier.flush()
+    notifier.send("second", "2")
+    notifier.flush()
+
+    assert [title for title, _ in inner.messages] == ["first", "second"]
+
+
+def test_async_notifier_skips_sending_when_disabled() -> None:
+    class _DisabledNotifier:
+        enabled = False
+
+        def __init__(self) -> None:
+            self.messages: list[tuple[str, str]] = []
+
+        def send(self, title: str, content: str) -> None:
+            self.messages.append((title, content))
+
+    inner = _DisabledNotifier()
+    notifier = AsyncNotifier(inner)
+
+    notifier.send("ignored", "x")
+    notifier.flush()
+
+    assert inner.messages == []
+
+
+def test_default_notifier_does_not_create_an_unowned_async_executor() -> None:
+    settings = AppSettings(
+        student_code="20230001",
+        password="secret",
+        server_chan_key="configured",
+    )
+    selector = CourseSelector(api=_FakeApi(), settings=settings)
+
+    assert isinstance(selector._notifier, ServerChanNotifier)
 
 
 def test_group_monitoring_queries_once_for_multiple_teachers() -> None:
@@ -110,12 +160,12 @@ def test_group_monitoring_queries_once_for_multiple_teachers() -> None:
 
     result = selector.run_group_monitoring_loop(
         course_name="Linear Algebra",
-        course_type="素选",
+        course_type=CourseType.PUBLIC,
         targets=[
             CourseItem(name="Linear Algebra", teacher="Prof. Li"),
             CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
         ],
-        is_stopped=lambda: False,
+        stop=StopToken(),
     )
 
     assert result is MonitorOutcome.SUCCESS
@@ -129,9 +179,9 @@ def test_group_monitoring_with_empty_targets_is_success() -> None:
 
     result = selector.run_group_monitoring_loop(
         course_name="Linear Algebra",
-        course_type="素选",
+        course_type=CourseType.PUBLIC,
         targets=[],
-        is_stopped=lambda: False,
+        stop=StopToken(),
     )
 
     assert result is MonitorOutcome.SUCCESS
@@ -146,11 +196,11 @@ def test_monitoring_wait_is_interruptible() -> None:
         poll_interval_max=1.0,
     )
     selector = CourseSelector(api=_FakeApi(), settings=settings)
-    stop_event = threading.Event()
+    stop = StopToken()
     course = CourseItem(name="Nonexistent", teacher="Nobody")
 
     class _NoResultApi(_FakeApi):
-        def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+        def query_courses(self, course_name: str, course_type: CourseType) -> list[CourseInfo]:
             self.query_count += 1
             return []
 
@@ -158,13 +208,13 @@ def test_monitoring_wait_is_interruptible() -> None:
 
     def _trigger_stop() -> None:
         time.sleep(0.05)
-        stop_event.set()
+        stop.set()
 
     stopper = threading.Thread(target=_trigger_stop)
     stopper.start()
 
     start = time.perf_counter()
-    result = selector.run_monitoring_loop(course, "素选", is_stopped=stop_event.is_set)
+    result = selector.run_monitoring_loop(course, CourseType.PUBLIC, stop=stop)
     elapsed = time.perf_counter() - start
     stopper.join()
 
@@ -193,10 +243,10 @@ def test_monitoring_retries_failures_until_threshold(
     monkeypatch.setattr(
         selector,
         "_wait_with_stop",
-        lambda delay, is_stopped: wait_delays.append(delay) or True,
+        lambda delay, stop: wait_delays.append(delay) or True,
     )
 
-    result = selector.run_monitoring_loop(course, "素选", is_stopped=lambda: False)
+    result = selector.run_monitoring_loop(course, CourseType.PUBLIC, stop=StopToken())
 
     assert result is MonitorOutcome.FAILED
     assert api.query_count == 5
@@ -214,17 +264,17 @@ def test_group_monitoring_preserves_successful_targets_across_target_failure(
     monkeypatch.setattr(
         selector,
         "_wait_with_stop",
-        lambda delay, is_stopped: wait_delays.append(delay) or True,
+        lambda delay, stop: wait_delays.append(delay) or True,
     )
 
     result = selector.run_group_monitoring_loop(
         course_name="Linear Algebra",
-        course_type="素选",
+        course_type=CourseType.PUBLIC,
         targets=[
             CourseItem(name="Linear Algebra", teacher="Prof. Li"),
             CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
         ],
-        is_stopped=lambda: False,
+        stop=StopToken(),
     )
 
     assert result is MonitorOutcome.SUCCESS

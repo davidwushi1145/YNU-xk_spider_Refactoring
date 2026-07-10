@@ -71,34 +71,3 @@ class Endpoints:
 
         timestamp = int(time.time() * 1000)
         return f"{self._base}/xsxkapp/sys/xsxkapp/elective/courseResult.do?timestamp={timestamp}&studentCode={student_code}&electiveBatchCode={batch_code}"
-
-    def get_course_url(self, course_type: str, token: str) -> str:
-        """Get appropriate course query URL based on type.
-
-        Args:
-            course_type: One of "素选", "主修", "体育".
-            token: Authentication token.
-
-        Returns:
-            Appropriate API URL.
-        """
-        if course_type == "素选":
-            return self.public_course(token)
-        return self.program_course(token)
-
-    @staticmethod
-    def get_class_type(course_type: str) -> str:
-        """Get teachingClassType value for API.
-
-        Args:
-            course_type: One of "素选", "主修", "体育".
-
-        Returns:
-            API class type code.
-        """
-        mapping = {
-            "素选": "XGXK",
-            "主修": "FANKC",
-            "体育": "TYKC",
-        }
-        return mapping.get(course_type, "XGXK")

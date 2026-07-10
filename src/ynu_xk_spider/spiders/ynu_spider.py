@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
@@ -13,13 +12,14 @@ from ..domain.models import MonitorOutcome
 from ..domain.services.course_api import CourseApiClient
 from ..domain.services.course_selector import CourseSelector
 from ..domain.services.login import LoginService
+from ..domain.services.notification import AsyncNotifier, ServerChanNotifier
 from ..exceptions import LoginError, StopRequestedError
 from ..http.client import HttpClient
 from .base import BaseSpider
 
 if TYPE_CHECKING:
     from ..config import AppSettings, CourseItem
-    from ..domain.models import SessionData
+    from ..domain.models import CourseTarget, CourseType, SessionData
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,10 @@ class YnuCourseSpider(BaseSpider):
         """
         super().__init__()
         self._settings = settings
-        self._browser = BrowserManager.instance(settings)
-        self._http = HttpClient(settings, stop_event=self.stop_event)
+        self._browser = BrowserManager(settings)
+        self._http = HttpClient(settings, stop=self.stop_token)
         self._solver = DdddocrSolver()
+        self._notifier = AsyncNotifier(ServerChanNotifier(settings.server_chan_key))
         self._max_workers = max_workers
 
     def run_loop(self) -> None:
@@ -76,7 +77,7 @@ class YnuCourseSpider(BaseSpider):
                     campus=self._settings.campus,
                 )
 
-                selector = CourseSelector(api, self._settings)
+                selector = CourseSelector(api, self._settings, notifier=self._notifier)
 
                 monitoring_result = self._run_monitoring(selector)
                 if monitoring_result is MonitorOutcome.STOPPED:
@@ -99,7 +100,6 @@ class YnuCourseSpider(BaseSpider):
                     self.MAX_CONSECUTIVE_LOGIN_FAILURES,
                     exc,
                 )
-                self._browser.shutdown()
                 if login_failures >= self.MAX_CONSECUTIVE_LOGIN_FAILURES:
                     logger.error("Too many consecutive login failures, stopping spider")
                     self.stop()
@@ -109,7 +109,6 @@ class YnuCourseSpider(BaseSpider):
 
             except Exception as exc:
                 logger.error("Unexpected error: %s", exc)
-                self._browser.shutdown()
                 if not self._wait_or_stop(5):
                     break
 
@@ -119,10 +118,13 @@ class YnuCourseSpider(BaseSpider):
 
     def _wait_or_stop(self, delay: float) -> bool:
         """Wait for a delay unless a stop request arrives first."""
-        return not self.stop_event.wait(delay)
+        return self.stop_token.wait(delay)
 
     def _perform_login(self) -> SessionData:
         """Perform login and return session data.
+
+        The browser is only needed while logging in; it is closed on every
+        exit path once the attempt finishes (the HTTP client takes over).
 
         Returns:
             SessionData if login succeeds.
@@ -131,7 +133,7 @@ class YnuCourseSpider(BaseSpider):
             self._settings,
             self._browser,
             self._solver,
-            is_stopped=self.is_stopped,
+            stop=self.stop_token,
         )
 
         try:
@@ -143,6 +145,8 @@ class YnuCourseSpider(BaseSpider):
         except Exception as exc:
             logger.error("Login failed: %s", exc)
             raise LoginError(f"Login failed: {exc}") from exc
+        finally:
+            self._browser.shutdown()
 
     def _resolve_worker_count(self, total_courses: int) -> int:
         """Compute worker count for the thread pool."""
@@ -170,13 +174,10 @@ class YnuCourseSpider(BaseSpider):
         grouped_courses = self._group_course_targets(courses)
         futures: list[Future[MonitorOutcome]] = []
         future_targets: dict[Future[MonitorOutcome], list[CourseItem]] = {}
-        batch_stop_event = threading.Event()
+        batch_stop = self.stop_token.child()
         success_count = 0
         total_targets = len(courses)
         worker_count = self._resolve_worker_count(len(grouped_courses))
-
-        def should_stop() -> bool:
-            return self.is_stopped() or batch_stop_event.is_set()
 
         try:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -186,7 +187,7 @@ class YnuCourseSpider(BaseSpider):
                         course_name,
                         course_type,
                         targets,
-                        should_stop,
+                        batch_stop,
                     )
                     futures.append(future)
                     future_targets[future] = targets
@@ -206,14 +207,14 @@ class YnuCourseSpider(BaseSpider):
                                 logger.info("Monitoring stopped")
                                 return MonitorOutcome.STOPPED
                             logger.warning("Monitoring group stopped unexpectedly")
-                            batch_stop_event.set()
+                            batch_stop.set()
                             return MonitorOutcome.FAILED
                         if result in (
                             MonitorOutcome.SESSION_EXPIRED,
                             MonitorOutcome.FAILED,
                         ):
                             logger.info("Monitoring group ended with %s", result.value)
-                            batch_stop_event.set()
+                            batch_stop.set()
                             return result
                         if result is MonitorOutcome.SUCCESS:
                             success_count += len(future_targets[future])
@@ -237,12 +238,12 @@ class YnuCourseSpider(BaseSpider):
                                 )
                     except Exception as exc:
                         logger.error("Thread error: %s", exc)
-                        batch_stop_event.set()
+                        batch_stop.set()
                         return MonitorOutcome.FAILED
 
             return MonitorOutcome.SUCCESS
         finally:
-            selector.wait_for_notifications()
+            self._notifier.flush()
 
     def on_stop(self) -> None:
         """Cleanup on spider stop."""
@@ -251,13 +252,13 @@ class YnuCourseSpider(BaseSpider):
 
     def _group_course_targets(
         self,
-        courses: list[tuple[CourseItem, str]],
-    ) -> list[tuple[str, str, list[CourseItem]]]:
+        courses: list[CourseTarget],
+    ) -> list[tuple[str, CourseType, list[CourseItem]]]:
         """Group targets by (course type, course name) to avoid duplicate queries."""
-        grouped: dict[tuple[str, str], list[CourseItem]] = {}
-        for course, course_type in courses:
-            key = (course_type, course.name)
-            grouped.setdefault(key, []).append(course)
+        grouped: dict[tuple[CourseType, str], list[CourseItem]] = {}
+        for target in courses:
+            key = (target.course_type, target.item.name)
+            grouped.setdefault(key, []).append(target.item)
 
         return [
             (course_name, course_type, targets)

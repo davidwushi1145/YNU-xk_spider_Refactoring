@@ -9,13 +9,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ..exceptions import NetworkError, SessionExpiredError
 from ..utils.retry import retry
 
 if TYPE_CHECKING:
     from ..config import AppSettings
+    from ..utils.stop import StopToken
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +54,17 @@ class HttpClient:
     def __init__(
         self,
         settings: AppSettings,
-        stop_event: threading.Event | None = None,
+        stop: StopToken | None = None,
     ) -> None:
         """Initialize HTTP client.
 
         Args:
             settings: Application settings.
-            stop_event: Optional stop event used to interrupt retry backoff.
+            stop: Optional stop token used to interrupt retry backoff.
         """
         self._settings = settings
         self._timeout = settings.http_timeout
-        self._stop_event = stop_event
+        self._stop = stop
         self._thread_local = threading.local()
         self._sessions: list[requests.Session] = []
         self._sessions_lock = threading.Lock()
@@ -72,6 +73,7 @@ class HttpClient:
         self._cookies: dict[str, str] = {}
         self._auth_generation = 0
         self._base_headers = self._build_base_headers()
+        self._retry = self._create_retry_decorator()
 
     def _build_base_headers(self) -> dict[str, str]:
         """Build default headers shared by all per-thread sessions."""
@@ -158,12 +160,14 @@ class HttpClient:
 
     def _sleep_for_retry(self, delay: float) -> bool:
         """Sleep between retries, aborting early when stop is requested."""
-        if self._stop_event is None:
+        if self._stop is None:
             time.sleep(delay)
             return True
-        return not self._stop_event.wait(delay)
+        return self._stop.wait(delay)
 
-    def _create_retry_decorator(self) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
+    def _create_retry_decorator(
+        self,
+    ) -> Callable[[Callable[[], requests.Response]], Callable[[], requests.Response]]:
         """Create retry decorator with current settings."""
         return retry(
             exceptions=(requests.RequestException, NetworkError),
@@ -175,12 +179,13 @@ class HttpClient:
             sleep=self._sleep_for_retry,
         )
 
-    def get(self, url: str, **kwargs: Any) -> requests.Response:
-        """Send GET request with retry.
+    def _request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        """Send an HTTP request with retry and session-expiry detection.
 
         Args:
+            method: HTTP method name (e.g. "GET", "POST").
             url: Target URL.
-            **kwargs: Additional arguments for requests.get.
+            **kwargs: Additional arguments for requests.Session.request.
 
         Returns:
             Response object.
@@ -191,17 +196,33 @@ class HttpClient:
         """
         kwargs.setdefault("timeout", self._timeout)
 
-        @self._create_retry_decorator()
-        def _get() -> requests.Response:
+        @self._retry
+        def _do() -> requests.Response:
             try:
                 session = self._get_session()
-                resp = session.get(url, **kwargs)
+                resp = session.request(method, url, **kwargs)
                 self._check_session_expired(resp)
                 return resp
             except requests.RequestException as exc:
                 raise NetworkError(str(exc)) from exc
 
-        return _get()
+        return _do()
+
+    def get(self, url: str, **kwargs: Any) -> requests.Response:
+        """Send GET request with retry.
+
+        Args:
+            url: Target URL.
+            **kwargs: Additional arguments for the underlying request.
+
+        Returns:
+            Response object.
+
+        Raises:
+            NetworkError: On request failure.
+            SessionExpiredError: If session is expired.
+        """
+        return self._request("GET", url, **kwargs)
 
     def post(
         self,
@@ -216,7 +237,7 @@ class HttpClient:
             url: Target URL.
             data: Form data.
             json: JSON payload.
-            **kwargs: Additional arguments for requests.post.
+            **kwargs: Additional arguments for the underlying request.
 
         Returns:
             Response object.
@@ -225,19 +246,7 @@ class HttpClient:
             NetworkError: On request failure.
             SessionExpiredError: If session is expired.
         """
-        kwargs.setdefault("timeout", self._timeout)
-
-        @self._create_retry_decorator()
-        def _post() -> requests.Response:
-            try:
-                session = self._get_session()
-                resp = session.post(url, data=data, json=json, **kwargs)
-                self._check_session_expired(resp)
-                return resp
-            except requests.RequestException as exc:
-                raise NetworkError(str(exc)) from exc
-
-        return _post()
+        return self._request("POST", url, data=data, json=json, **kwargs)
 
     def _check_session_expired(self, resp: requests.Response) -> None:
         """Check if response indicates session expiration.

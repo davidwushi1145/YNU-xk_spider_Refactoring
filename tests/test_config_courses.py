@@ -40,3 +40,13 @@ def test_app_settings_load_rejects_missing_explicit_config(tmp_path: Path) -> No
 
     with pytest.raises(ConfigError):
         AppSettings.load(missing)
+
+
+def test_app_settings_rejects_inverted_poll_interval() -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(
+            student_code="20230001",
+            password="secret",
+            poll_interval_min=10.0,
+            poll_interval_max=5.0,
+        )

@@ -4,57 +4,21 @@ from __future__ import annotations
 
 import logging
 import random
-import threading
 import time
 from collections.abc import Callable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING
-
-import requests  # type: ignore[import-untyped]
 
 from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
 from ..models import MonitorOutcome
+from .notification import Notifier, ServerChanNotifier
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
-    from ..models import CourseInfo
+    from ...utils.stop import StopToken
+    from ..models import CourseInfo, CourseType
     from .course_api import CourseApiClient
 
 logger = logging.getLogger(__name__)
-
-
-class NotificationService:
-    """Simple notification service via ServerChan."""
-
-    def __init__(self, server_key: str | None = None) -> None:
-        """Initialize notification service.
-
-        Args:
-            server_key: ServerChan API key.
-        """
-        self._server_key = server_key
-
-    def send(self, title: str, content: str) -> None:
-        """Send notification via WeChat.
-
-        Args:
-            title: Notification title.
-            content: Notification body.
-        """
-        if not self._server_key:
-            return
-
-        try:
-            url = f"https://sctapi.ftqq.com/{self._server_key}.send"
-            requests.post(url, data={"text": title, "desp": content}, timeout=5)
-            logger.debug("Notification sent: %s", title)
-        except Exception as exc:
-            logger.warning("Notification failed: %s", exc)
-
-    @property
-    def enabled(self) -> bool:
-        """Whether notification sending is configured."""
-        return bool(self._server_key)
 
 
 class CourseSelector:
@@ -78,65 +42,38 @@ class CourseSelector:
         self,
         api: CourseApiClient,
         settings: AppSettings,
-        notifier: NotificationService | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         """Initialize course selector.
 
         Args:
             api: Course API client.
             settings: Application settings.
-            notifier: Optional notification service.
+            notifier: Optional notification sink; defaults to synchronous
+                ServerChan push configured from settings. Callers that need
+                non-blocking delivery should inject and own an AsyncNotifier.
         """
         self._api = api
         self._settings = settings
-        self._notifier = notifier or NotificationService(settings.server_chan_key)
-        self._notification_executor: ThreadPoolExecutor | None = None
-        self._notification_futures: list[Future[None]] = []
-        self._notification_lock = threading.Lock()
+        self._notifier: Notifier = (
+            notifier
+            if notifier is not None
+            else ServerChanNotifier(settings.server_chan_key)
+        )
         self._hot_path_log_times: dict[str, float] = {}
-
-    def _notify_async(self, title: str, content: str) -> None:
-        """Send notifications off the critical selection path."""
-        if not self._notifier.enabled:
-            return
-        with self._notification_lock:
-            self._notification_futures = [
-                future for future in self._notification_futures if not future.done()
-            ]
-            if self._notification_executor is None:
-                self._notification_executor = ThreadPoolExecutor(
-                    max_workers=1,
-                    thread_name_prefix="notification-sender",
-                )
-            future = self._notification_executor.submit(self._notifier.send, title, content)
-            self._notification_futures.append(future)
-
-    def wait_for_notifications(self, timeout: float | None = None) -> None:
-        """Wait for pending async notifications to finish sending."""
-        with self._notification_lock:
-            futures = list(self._notification_futures)
-            executor = self._notification_executor
-            self._notification_futures.clear()
-            self._notification_executor = None
-
-        if futures:
-            wait(futures, timeout=timeout)
-
-        if executor is not None:
-            executor.shutdown(wait=timeout is None)
 
     def run_monitoring_loop(
         self,
         course: CourseItem,
-        course_type: str,
-        is_stopped: Callable[[], bool],
+        course_type: CourseType,
+        stop: StopToken,
     ) -> MonitorOutcome:
         """Monitor a single course and attempt selection when available.
 
         Args:
             course: Target course configuration.
-            course_type: One of "素选", "主修", "体育".
-            is_stopped: Callable returning True when stop requested.
+            course_type: Course category of the target.
+            stop: Stop token honored during monitoring.
 
         Returns:
             Monitoring outcome for this single target.
@@ -145,15 +82,15 @@ class CourseSelector:
             course_name=course.name,
             course_type=course_type,
             targets=[course],
-            is_stopped=is_stopped,
+            stop=stop,
         )
 
     def run_group_monitoring_loop(
         self,
         course_name: str,
-        course_type: str,
+        course_type: CourseType,
         targets: Sequence[CourseItem],
-        is_stopped: Callable[[], bool],
+        stop: StopToken,
     ) -> MonitorOutcome:
         """Monitor a course group with one shared query per polling cycle."""
         pending_targets = list(targets)
@@ -170,7 +107,7 @@ class CourseSelector:
         fail_count = 0
         max_consecutive_failures = 5
 
-        while pending_targets and not is_stopped():
+        while pending_targets and not stop.is_set():
             try:
                 courses = self._api.query_courses(course_name, course_type)
 
@@ -180,14 +117,14 @@ class CourseSelector:
                         "[%s] No courses found",
                         course_name,
                     )
-                    if not self._wait_random(is_stopped):
+                    if not self._wait_random(stop):
                         return MonitorOutcome.STOPPED
                     continue
 
                 remaining_targets: list[CourseItem] = []
                 for index, target in enumerate(pending_targets):
                     try:
-                        if is_stopped():
+                        if stop.is_set():
                             return MonitorOutcome.STOPPED
 
                         teacher_slots = self._api.find_courses_by_teacher(
@@ -226,7 +163,7 @@ class CourseSelector:
                     return MonitorOutcome.SUCCESS
 
                 pending_targets = remaining_targets
-                if not self._wait_random(is_stopped):
+                if not self._wait_random(stop):
                     return MonitorOutcome.STOPPED
                 fail_count = 0
 
@@ -240,7 +177,7 @@ class CourseSelector:
                     exc=exc,
                     fail_count=fail_count,
                     max_consecutive_failures=max_consecutive_failures,
-                    is_stopped=is_stopped,
+                    stop=stop,
                     log_method=logger.warning,
                     log_message="[%s] Error: %s (fail %d)",
                 )
@@ -253,14 +190,14 @@ class CourseSelector:
                     exc=exc,
                     fail_count=fail_count,
                     max_consecutive_failures=max_consecutive_failures,
-                    is_stopped=is_stopped,
+                    stop=stop,
                     log_method=logger.error,
                     log_message="[%s] Unexpected error: %s (fail %d)",
                 )
                 if outcome is not None:
                     return outcome
 
-        return MonitorOutcome.STOPPED if is_stopped() else MonitorOutcome.FAILED
+        return MonitorOutcome.STOPPED if stop.is_set() else MonitorOutcome.FAILED
 
     def _handle_monitoring_failure(
         self,
@@ -268,13 +205,13 @@ class CourseSelector:
         exc: Exception,
         fail_count: int,
         max_consecutive_failures: int,
-        is_stopped: Callable[[], bool],
+        stop: StopToken,
         *,
         log_method: Callable[..., None],
         log_message: str,
     ) -> tuple[int, MonitorOutcome | None]:
         """Handle a failed monitoring attempt and decide whether to retry."""
-        if is_stopped():
+        if stop.is_set():
             return fail_count, MonitorOutcome.STOPPED
 
         fail_count += 1
@@ -284,7 +221,7 @@ class CourseSelector:
             logger.error("[%s] Too many failures, stopping", course_name)
             return fail_count, MonitorOutcome.FAILED
 
-        if not self._wait_with_stop(5, is_stopped):
+        if not self._wait_with_stop(5, stop):
             return fail_count, MonitorOutcome.STOPPED
 
         return fail_count, None
@@ -292,7 +229,7 @@ class CourseSelector:
     def _try_select_available_slots(
         self,
         course: CourseItem,
-        course_type: str,
+        course_type: CourseType,
         available_slots: Sequence[CourseInfo],
     ) -> bool:
         """Try selecting the target from available slots."""
@@ -306,14 +243,14 @@ class CourseSelector:
         for slot in available_slots:
             msg = f"Found spot! {course.name}-{course.teacher} remaining: {slot.remaining}"
             logger.info(msg)
-            self._notify_async("Course Alert", msg)
+            self._notifier.send("Course Alert", msg)
 
             result = self._api.select_course(slot, course_type)
 
             if result.success:
                 success_msg = f"Selection successful: {course.name}"
                 logger.info(success_msg)
-                self._notify_async("Selection Success", success_msg)
+                self._notifier.send("Selection Success", success_msg)
                 return True
 
             if "时间冲突" in result.message or "该课程与已选课程时间冲突" in result.message:
@@ -357,24 +294,18 @@ class CourseSelector:
         self._hot_path_log_times[key] = now
         logger.debug(message, *args)
 
-    def _wait_random(self, is_stopped: Callable[[], bool]) -> bool:
+    def _wait_random(self, stop: StopToken) -> bool:
         """Wait for a random interval within configured bounds."""
         interval = random.uniform(
             self._settings.poll_interval_min,
             self._settings.poll_interval_max,
         )
-        return self._wait_with_stop(interval, is_stopped)
+        return self._wait_with_stop(interval, stop)
 
-    def _wait_with_stop(
-        self,
-        delay: float,
-        is_stopped: Callable[[], bool],
-    ) -> bool:
-        """Sleep in short slices so stop requests can interrupt polling."""
-        deadline = time.monotonic() + delay
-        while not is_stopped():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return True
-            time.sleep(min(0.1, remaining))
-        return False
+    def _wait_with_stop(self, delay: float, stop: StopToken) -> bool:
+        """Block for a delay unless stop is requested first.
+
+        Returns:
+            True if the full delay elapsed, False when interrupted by stop.
+        """
+        return stop.wait(delay)

@@ -1,5 +1,7 @@
 # YNU-xk_spider（重构版 v2.0）
 
+[![CI](https://github.com/davidwushi1145/YNU-xk_spider_Refactoring/actions/workflows/ci.yml/badge.svg?branch=new)](https://github.com/davidwushi1145/YNU-xk_spider_Refactoring/actions/workflows/ci.yml)
+
 > [!CAUTION]
 >
 > Disclaimer / 声明
@@ -16,15 +18,16 @@
 
 ## 架构升级
 
-| 特性               | 描述                                                   |
-| ------------------ | ------------------------------------------------------ |
-| **现代项目结构**   | 采用 `/src` 布局，模块职责清晰分离                     |
-| **Pydantic 配置**  | 类型安全的配置验证，支持环境变量覆盖                   |
-| **单例浏览器管理** | `BrowserManager` 线程安全单例，统一 WebDriver 生命周期 |
-| **重试机制**       | 指数退避 + 随机抖动的网络重试装饰器                    |
-| **优雅停机**       | 信号处理 + `threading.Event` 实现无损退出              |
-| **自定义异常**     | 完整的异常层次结构，精准定位问题                       |
-| **完整类型注解**   | 100% Type Hints + Google Style Docstrings              |
+| 特性               | 描述                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| **现代项目结构**   | 采用 `/src` 布局，模块职责清晰分离                           |
+| **Pydantic 配置**  | 类型安全的配置验证，支持环境变量覆盖                         |
+| **类型化领域**     | `CourseType` 枚举统一类别映射（接口路由 / 编码 / 响应解析）  |
+| **浏览器生命周期** | `BrowserManager` 由 Spider 构造持有，登录结束即关闭          |
+| **重试机制**       | 指数退避 + 随机抖动的网络重试装饰器                          |
+| **统一取消语义**   | `StopToken` 贯穿所有等待路径，原生阻塞、即时可中断           |
+| **自定义异常**     | 完整的异常层次结构，精准定位问题                             |
+| **完整类型注解**   | 100% Type Hints + Google Style Docstrings，mypy strict 全绿  |
 
 ---
 
@@ -42,14 +45,15 @@
 
 ---
 
-## 最近更新
+## 最近更新（架构重构 v2.1）
 
-- 修复并发线程数计算：`max_workers` 现在被严格视为上限，不再被课程数强制抬高
-- 优化通知发送：移除 daemon 通知线程，新增等待机制，确保进程收尾阶段尽量完成推送
-- 强化登录页面判定：`_wait_course_page_ready` 不再仅凭 URL 中 `token=` 判定成功
-- 增强 `courseBtn` 容错：按钮瞬时缺失时会告警并重试，避免直接抛错中断
-- 改进调试可观测性：准备点击 `courseBtn` 的最佳努力步骤失败时输出 `DEBUG` 日志
-- 新增监控分组轮询、可中断等待、通知工作线程、模块入口与环境变量加载回归测试（当前测试集共 22 项，均通过）
+- **领域类型化**：课程类别升级为 `CourseType` 枚举，接口路由 / `teachingClassType` 编码 / 响应解析共用一张真值表，未知类别不再被静默回退
+- **统一取消**：新增 `StopToken`（`utils/stop.py`），删除三处 0.1s 切片轮询等待；批次停止改为父子令牌级联
+- **生命周期归属**：`BrowserManager` 去单例，浏览器关闭权收口到 Spider 的 `_perform_login`；登录服务不再隐式关闭浏览器
+- **通知独立**：`Notifier` 协议 + `ServerChanNotifier` + `AsyncNotifier` 移入 `services/notification.py`，选课器只负责选课，通知由 Spider 持有并在批次收尾 flush
+- **HTTP 简化**：`HttpClient.get/post` 合并为单一 `_request` 路径，重试装饰器构造一次复用
+- **更诚实的校验**：`poll_interval_min > max` 直接报配置错误而非静默交换；`main()` 编程调用不再误读进程 argv
+- **清理**：移除全部死代码与 Pydantic v1 兼容垫片；ruff / mypy strict 全绿（当前测试集共 43 项，均通过）
 
 ---
 
@@ -63,19 +67,21 @@ src/ynu_xk_spider/
 ├── exceptions.py          # 自定义异常层次
 ├── logging_config.py      # 日志配置
 ├── utils/
-│   └── retry.py           # 重试装饰器
+│   ├── retry.py           # 重试装饰器
+│   └── stop.py            # StopToken 统一取消原语
 ├── browser/
-│   ├── manager.py         # BrowserManager 单例
+│   ├── manager.py         # BrowserManager（WebDriver 生命周期）
 │   └── captcha.py         # 验证码识别抽象
 ├── http/
 │   ├── client.py          # HTTP 客户端封装
 │   └── endpoints.py       # API 端点构建器
 ├── domain/
-│   ├── models.py          # 领域模型
+│   ├── models.py          # 领域模型（含 CourseType 枚举）
 │   └── services/
 │       ├── login.py       # 登录服务
 │       ├── course_api.py  # 课程 API 客户端
-│       └── course_selector.py  # 选课业务逻辑
+│       ├── course_selector.py  # 选课业务逻辑
+│       └── notification.py     # 通知协议与异步发送
 └── spiders/
     ├── base.py            # BaseSpider 抽象基类
     └── ynu_spider.py      # YNU 选课爬虫实现
@@ -178,7 +184,7 @@ cp config.sample.json config.json
 | `chrome_driver_path` | string | ChromeDriver 路径，留空自动检测        |
 | `headless`           | bool   | 是否无头模式运行浏览器                 |
 | `log_level`          | string | 日志级别：DEBUG/INFO/WARNING/ERROR     |
-| `poll_interval_min`  | float  | 最小轮询间隔（秒）                     |
+| `poll_interval_min`  | float  | 最小轮询间隔（秒），须 ≤ max           |
 | `poll_interval_max`  | float  | 最大轮询间隔（秒）                     |
 | `campus`             | string | 校区代码：`02`=呈贡校区，`01`=东陆校区 |
 | `courses.public`     | array  | 素选课列表                             |
@@ -322,7 +328,7 @@ spider.start()
           LoginSvc["LoginService<br/>(domain/services/login.py)"]
           API["CourseApiClient<br/>(domain/services/course_api.py)"]
           Selector["CourseSelector<br/>(domain/services/course_selector.py)"]
-          Notify["NotificationService<br/>(ServerChan)"]
+          Notify["AsyncNotifier + ServerChan<br/>(services/notification.py)"]
       end
       Selector --> Notify
 
@@ -355,9 +361,16 @@ spider.start()
       API --> SelRes
 
       Selector --> API
-      Selector --> HC
       Selector --> CourseInfo
       Selector --> SelRes
+
+      %% Cancellation
+      Stop["StopToken<br/>(utils/stop.py)"]
+      YCS --> Stop
+      Stop -. "cancel" .-> LoginSvc
+      Stop -. "cancel" .-> Selector
+      Stop -. "cancel" .-> HC
+      YCS -. "flush" .-> Notify
 
       %% Auth flow
       Session -. "token/cookies" .-> HC
@@ -382,12 +395,13 @@ spider.start()
 
 ### 核心设计模式
 
-| 模式           | 应用                                     |
-| -------------- | ---------------------------------------- |
-| **单例模式**   | `BrowserManager` 统一管理 WebDriver 实例 |
-| **模板方法**   | `BaseSpider` 定义生命周期钩子            |
-| **策略模式**   | `CaptchaSolver` 抽象验证码识别实现       |
-| **装饰器模式** | `@retry` 为网络操作添加重试能力          |
+| 模式           | 应用                                             |
+| -------------- | ------------------------------------------------ |
+| **模板方法**   | `BaseSpider` 定义生命周期钩子                    |
+| **策略模式**   | `CaptchaSolver` 抽象验证码识别实现               |
+| **协议接口**   | `Notifier` Protocol 解耦通知实现与选课逻辑       |
+| **装饰器模式** | `@retry` 为网络操作添加重试能力                  |
+| **取消令牌**   | `StopToken` 层级化停止信号，支持批次级联取消     |
 
 ---
 
@@ -426,6 +440,33 @@ ruff check src/ --fix
 
 # 运行测试
 pytest
+```
+
+### CI/CD
+
+- `.github/workflows/ci.yml` 会在向 `dev`、`new` 分支 push 或提交 Pull
+  Request 时执行 Ruff、mypy、Python 3.10–3.12 测试矩阵、发行包构建和 wheel
+  安装冒烟测试。
+- `.github/workflows/release.yml` 会在推送 `v*` 标签时重新执行质量检查，验证
+  标签对应的提交已合并到默认分支，并确保标签、`pyproject.toml` 和
+  `ynu_xk_spider.__version__` 三者版本一致，再运行 Python 3.10–3.12 测试矩阵，
+  最后构建 wheel/sdist 并创建 GitHub Release。
+- PyPI 发布默认关闭。若需要启用，请在仓库中创建名为 `pypi` 的
+  [GitHub Environment](https://docs.github.com/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)，
+  在 PyPI 配置对应的
+  [Trusted Publisher](https://docs.pypi.org/trusted-publishers/using-a-publisher/)，并将仓库变量
+  `PUBLISH_TO_PYPI` 设置为 `true`。该方式使用 OIDC，不需要保存 PyPI API
+  Token。启用 PyPI 发布前，必须限制 `v*` 标签的创建权限，并为 `pypi`
+  Environment 配置标签保护规则和人工审批。
+- 已发布的 PyPI 版本不可覆盖；若发布阶段失败，应在 GitHub Actions 中使用
+  **Re-run failed jobs** 恢复，而不是覆盖同版本标签或重跑整条发布流程。
+
+发布新版本前，需要同时更新 `pyproject.toml` 与
+`src/ynu_xk_spider/__init__.py` 中的版本号，然后推送匹配的标签：
+
+```bash
+git tag -a v2.1.1 -m "release: v2.1.1"
+git push origin v2.1.1
 ```
 
 ---

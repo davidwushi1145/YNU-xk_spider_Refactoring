@@ -1,21 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-
 import pytest
 
 from ynu_xk_spider.browser.manager import BrowserManager
 from ynu_xk_spider.config import AppSettings, CourseItem, CoursesConfig
-from ynu_xk_spider.domain.models import MonitorOutcome, SessionData
+from ynu_xk_spider.domain.models import CourseType, MonitorOutcome, SessionData
 from ynu_xk_spider.exceptions import LoginError, StopRequestedError
 from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
-
-
-@pytest.fixture(autouse=True)
-def _reset_browser_manager() -> Generator[None, None, None]:
-    BrowserManager.reset()
-    yield
-    BrowserManager.reset()
+from ynu_xk_spider.utils.stop import StopToken
 
 
 def _build_settings() -> AppSettings:
@@ -65,7 +57,7 @@ def test_group_course_targets_merges_same_name_and_type() -> None:
     assert grouped == [
         (
             "Linear Algebra",
-            "素选",
+            CourseType.PUBLIC,
             [
                 CourseItem(name="Linear Algebra", teacher="Prof. Li"),
                 CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
@@ -73,7 +65,7 @@ def test_group_course_targets_merges_same_name_and_type() -> None:
         ),
         (
             "Swimming",
-            "体育",
+            CourseType.PE,
             [CourseItem(name="Swimming", teacher="Coach Lin")],
         ),
     ]
@@ -94,13 +86,10 @@ def test_run_monitoring_returns_stopped_for_manual_stop() -> None:
         def run_group_monitoring_loop(self, *args: object, **kwargs: object) -> MonitorOutcome:
             return MonitorOutcome.STOPPED
 
-        def wait_for_notifications(self, timeout: float | None = None) -> None:
-            return None
-
     assert spider._run_monitoring(_StoppedSelector()) is MonitorOutcome.STOPPED
 
 
-def test_perform_login_reuses_solver_and_stop_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_perform_login_reuses_solver_and_stop_token(monkeypatch: pytest.MonkeyPatch) -> None:
     spider = YnuCourseSpider(_build_settings())
     observed_solver_ids: list[int] = []
     observed_stop_values: list[bool] = []
@@ -111,10 +100,10 @@ def test_perform_login_reuses_solver_and_stop_callback(monkeypatch: pytest.Monke
             settings: AppSettings,
             browser: BrowserManager,
             solver: object,
-            is_stopped: object,
+            stop: StopToken,
         ) -> None:
             observed_solver_ids.append(id(solver))
-            observed_stop_values.append(bool(is_stopped()))
+            observed_stop_values.append(stop.is_set())
 
         def login(self) -> SessionData:
             return SessionData(cookies={"SESSION": "abc"}, token="token", batch_code="batch")
