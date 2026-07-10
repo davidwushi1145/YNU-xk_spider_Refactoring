@@ -1,5 +1,7 @@
 # YNU-xk_spider（重构版 v2.0）
 
+[![CI](https://github.com/davidwushi1145/YNU-xk_spider_Refactoring/actions/workflows/ci.yml/badge.svg?branch=new)](https://github.com/davidwushi1145/YNU-xk_spider_Refactoring/actions/workflows/ci.yml)
+
 > [!CAUTION]
 >
 > Disclaimer / 声明
@@ -438,6 +440,33 @@ ruff check src/ --fix
 
 # 运行测试
 pytest
+```
+
+### CI/CD
+
+- `.github/workflows/ci.yml` 会在向 `dev`、`new` 分支 push 或提交 Pull
+  Request 时执行 Ruff、mypy、Python 3.10–3.12 测试矩阵、发行包构建和 wheel
+  安装冒烟测试。
+- `.github/workflows/release.yml` 会在推送 `v*` 标签时重新执行质量检查，验证
+  标签对应的提交已合并到默认分支，并确保标签、`pyproject.toml` 和
+  `ynu_xk_spider.__version__` 三者版本一致，再运行 Python 3.10–3.12 测试矩阵，
+  最后构建 wheel/sdist 并创建 GitHub Release。
+- PyPI 发布默认关闭。若需要启用，请在仓库中创建名为 `pypi` 的
+  [GitHub Environment](https://docs.github.com/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)，
+  在 PyPI 配置对应的
+  [Trusted Publisher](https://docs.pypi.org/trusted-publishers/using-a-publisher/)，并将仓库变量
+  `PUBLISH_TO_PYPI` 设置为 `true`。该方式使用 OIDC，不需要保存 PyPI API
+  Token。启用 PyPI 发布前，必须限制 `v*` 标签的创建权限，并为 `pypi`
+  Environment 配置标签保护规则和人工审批。
+- 已发布的 PyPI 版本不可覆盖；若发布阶段失败，应在 GitHub Actions 中使用
+  **Re-run failed jobs** 恢复，而不是覆盖同版本标签或重跑整条发布流程。
+
+发布新版本前，需要同时更新 `pyproject.toml` 与
+`src/ynu_xk_spider/__init__.py` 中的版本号，然后推送匹配的标签：
+
+```bash
+git tag -a v2.1.1 -m "release: v2.1.1"
+git push origin v2.1.1
 ```
 
 ---
