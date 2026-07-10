@@ -230,17 +230,18 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_poll_interval(self) -> AppSettings:
-        """Ensure min <= max for poll interval.
+        """Reject configurations where the poll interval bounds are inverted.
 
         Returns:
-            Self with normalized poll interval bounds.
+            Self when the poll interval bounds are consistent.
+
+        Raises:
+            ValueError: If poll_interval_min > poll_interval_max.
         """
         if self.poll_interval_min > self.poll_interval_max:
-            return self.model_copy(
-                update={
-                    "poll_interval_min": self.poll_interval_max,
-                    "poll_interval_max": self.poll_interval_min,
-                }
+            raise ValueError(
+                "poll_interval_min must be <= poll_interval_max "
+                f"(got {self.poll_interval_min} > {self.poll_interval_max})"
             )
         return self
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import signal
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
 
@@ -13,9 +15,14 @@ from .exceptions import ConfigError, SpiderError
 from .logging_config import setup_logging
 from .spiders.ynu_spider import YnuCourseSpider
 
+logger = logging.getLogger(__name__)
 
-def parse_args() -> argparse.Namespace:
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments.
+
+    Args:
+        argv: Explicit argument list; defaults to the process argv.
 
     Returns:
         Parsed arguments namespace.
@@ -42,25 +49,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override log level",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main(config_path: Path | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Main application entry point.
 
     Args:
-        config_path: Optional config file path override.
+        argv: Explicit CLI arguments; defaults to the process argv. Pass
+            a list (e.g. []) when calling programmatically to avoid
+            picking up unrelated process arguments.
 
     Returns:
         Exit code (0 for success, 1 for error).
     """
-    args = parse_args()
-
-    if config_path is None:
-        config_path = args.config
+    args = parse_args(argv)
 
     try:
-        settings = AppSettings.load(config_path)
+        settings = AppSettings.load(args.config)
 
         updates = {}
         if args.headless:
@@ -75,10 +81,6 @@ def main(config_path: Path | None = None) -> int:
         return 1
 
     setup_logging(settings)
-
-    import logging
-
-    logger = logging.getLogger(__name__)
 
     logger.info("=" * 60)
     logger.info("YNU Auto Course Selector (Refactored v2.0)")
