@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
 from ..models import MonitorOutcome

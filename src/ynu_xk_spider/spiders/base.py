@@ -28,7 +28,6 @@ class BaseSpider(ABC):
         """Start the spider run loop with lifecycle hooks."""
         logger.info("Spider starting")
         try:
-            self.on_start()
             self.run_loop()
         except Exception as exc:
             logger.error("Spider error: %s", exc)
@@ -50,21 +49,9 @@ class BaseSpider(ABC):
         """
         return self.stop_event.is_set()
 
-    def raise_if_stopped(self) -> None:
-        """Raise RuntimeError if stop was requested.
-
-        Raises:
-            RuntimeError: If stop_event is set.
-        """
-        if self.is_stopped():
-            raise RuntimeError("Stop requested")
-
     @abstractmethod
     def run_loop(self) -> None:
         """Main execution loop. Must honor self.stop_event."""
 
-    def on_start(self) -> None:
-        """Hook called before run_loop. Override for setup."""
-
-    def on_stop(self) -> None:
+    def on_stop(self) -> None:  # noqa: B027 - optional hook, intentionally empty
         """Hook called after run_loop. Override for cleanup."""

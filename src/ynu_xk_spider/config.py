@@ -269,7 +269,7 @@ class AppSettings(BaseSettings):
                 raise ConfigError(f"Config file not found: {config_file}")
 
             try:
-                return cls()
+                return cls()  # type: ignore[call-arg]
             except ValidationError as e:
                 raise ConfigError(
                     "Config file not found: config.json. Provide the file or set "

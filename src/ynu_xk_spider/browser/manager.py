@@ -56,7 +56,7 @@ class BrowserManager:
                 if cls._instance is None:
                     cls._instance = cls(settings)
                     logger.debug("BrowserManager singleton created")
-        elif settings is not None and cls._instance._settings != settings:
+        elif cls._instance._settings != settings:
             logger.warning("BrowserManager already initialized with different settings")
         return cls._instance
 

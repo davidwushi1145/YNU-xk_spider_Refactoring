@@ -125,25 +125,6 @@ class CourseApiClient:
 
         return courses
 
-    def find_course_by_teacher(
-        self,
-        courses: list[CourseInfo],
-        teacher_name: str,
-    ) -> CourseInfo | None:
-        """Find a course by teacher name.
-
-        Args:
-            courses: List of courses to search.
-            teacher_name: Teacher name to match.
-
-        Returns:
-            Matching course or None.
-        """
-        for course in courses:
-            if teacher_name in course.teacher_name:
-                return course
-        return None
-
     def find_courses_by_teacher(
         self,
         courses: list[CourseInfo],

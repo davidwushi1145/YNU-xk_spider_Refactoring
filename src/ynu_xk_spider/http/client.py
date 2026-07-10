@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from ..exceptions import NetworkError, SessionExpiredError
 from ..utils.retry import retry
@@ -163,7 +163,9 @@ class HttpClient:
             return True
         return not self._stop_event.wait(delay)
 
-    def _create_retry_decorator(self) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
+    def _create_retry_decorator(
+        self,
+    ) -> Callable[[Callable[[], requests.Response]], Callable[[], requests.Response]]:
         """Create retry decorator with current settings."""
         return retry(
             exceptions=(requests.RequestException, NetworkError),
