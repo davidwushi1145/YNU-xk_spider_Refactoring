@@ -13,6 +13,7 @@ from selenium.webdriver.common.by import By
 from ynu_xk_spider.config import AppSettings
 from ynu_xk_spider.domain.services.login import LoginService
 from ynu_xk_spider.exceptions import StopRequestedError
+from ynu_xk_spider.utils.stop import StopToken
 
 
 class _DummyBrowser:
@@ -229,28 +230,25 @@ def test_open_course_selection_page_retries_when_course_button_missing(monkeypat
         "_prepare_for_start_button_click",
         lambda _: None,
     )
-    monkeypatch.setattr(
-        "ynu_xk_spider.domain.services.login.time.sleep",
-        lambda _: None,
-    )
+    monkeypatch.setattr(service, "_wait_or_stop", lambda _delay: None)
 
     assert service._open_course_selection_page(driver) is False
     assert driver.find_attempts == service.MAX_START_BUTTON_ATTEMPTS
 
 
 def test_wait_or_stop_is_interruptible() -> None:
-    stop_event = threading.Event()
+    stop = StopToken()
     settings = AppSettings(student_code="20230001", password="secret")
     service = LoginService(
         settings,
         _DummyBrowser(),
         _DummySolver(),
-        is_stopped=stop_event.is_set,
+        stop=stop,
     )
 
     def _trigger_stop() -> None:
         time.sleep(0.05)
-        stop_event.set()
+        stop.set()
 
     stopper = threading.Thread(target=_trigger_stop)
     stopper.start()

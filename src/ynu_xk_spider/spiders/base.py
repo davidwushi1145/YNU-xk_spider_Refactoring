@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-import threading
 from abc import ABC, abstractmethod
 from typing import Final
+
+from ..utils.stop import StopToken
 
 logger = logging.getLogger(__name__)
 
@@ -13,16 +14,16 @@ logger = logging.getLogger(__name__)
 class BaseSpider(ABC):
     """Abstract base spider providing lifecycle and stop signal handling.
 
-    Subclasses implement run_loop() and use self.stop_event to detect
+    Subclasses implement run_loop() and use self.stop_token to detect
     shutdown requests. The start() method handles the full lifecycle.
 
     Attributes:
-        stop_event: Threading event for graceful shutdown signaling.
+        stop_token: Cancellation token for graceful shutdown signaling.
     """
 
     def __init__(self) -> None:
-        """Initialize spider with stop event."""
-        self.stop_event: Final[threading.Event] = threading.Event()
+        """Initialize spider with stop token."""
+        self.stop_token: Final[StopToken] = StopToken()
 
     def start(self) -> None:
         """Start the spider run loop with lifecycle hooks."""
@@ -39,7 +40,7 @@ class BaseSpider(ABC):
     def stop(self) -> None:
         """Signal the spider to stop gracefully."""
         logger.info("Stop signal received")
-        self.stop_event.set()
+        self.stop_token.set()
 
     def is_stopped(self) -> bool:
         """Check if stop has been requested.
@@ -47,11 +48,11 @@ class BaseSpider(ABC):
         Returns:
             True if stop was signaled.
         """
-        return self.stop_event.is_set()
+        return self.stop_token.is_set()
 
     @abstractmethod
     def run_loop(self) -> None:
-        """Main execution loop. Must honor self.stop_event."""
+        """Main execution loop. Must honor self.stop_token."""
 
     def on_stop(self) -> None:  # noqa: B027 - optional hook, intentionally empty
         """Hook called after run_loop. Override for cleanup."""

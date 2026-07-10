@@ -10,6 +10,7 @@ import requests
 from ynu_xk_spider.config import AppSettings
 from ynu_xk_spider.exceptions import NetworkError
 from ynu_xk_spider.http.client import HttpClient
+from ynu_xk_spider.utils.stop import StopToken
 
 
 class _FakeCookies:
@@ -77,7 +78,7 @@ def test_http_client_uses_thread_local_sessions(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_http_client_retry_backoff_is_interruptible(monkeypatch: pytest.MonkeyPatch) -> None:
-    stop_event = threading.Event()
+    stop = StopToken()
 
     def _build_session() -> _FakeSession:
         return _FakeSession(should_fail=True)
@@ -92,13 +93,13 @@ def test_http_client_retry_backoff_is_interruptible(monkeypatch: pytest.MonkeyPa
             retry_backoff=1.0,
             retry_factor=1.0,
         ),
-        stop_event=stop_event,
+        stop=stop,
     )
     client.set_auth("token", {"SESSION": "abc"})
 
     def _trigger_stop() -> None:
         time.sleep(0.05)
-        stop_event.set()
+        stop.set()
 
     stopper = threading.Thread(target=_trigger_stop)
     stopper.start()

@@ -9,6 +9,7 @@ from ynu_xk_spider.config import AppSettings, CourseItem, CoursesConfig
 from ynu_xk_spider.domain.models import CourseType, MonitorOutcome, SessionData
 from ynu_xk_spider.exceptions import LoginError, StopRequestedError
 from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
+from ynu_xk_spider.utils.stop import StopToken
 
 
 @pytest.fixture(autouse=True)
@@ -100,7 +101,7 @@ def test_run_monitoring_returns_stopped_for_manual_stop() -> None:
     assert spider._run_monitoring(_StoppedSelector()) is MonitorOutcome.STOPPED
 
 
-def test_perform_login_reuses_solver_and_stop_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_perform_login_reuses_solver_and_stop_token(monkeypatch: pytest.MonkeyPatch) -> None:
     spider = YnuCourseSpider(_build_settings())
     observed_solver_ids: list[int] = []
     observed_stop_values: list[bool] = []
@@ -111,10 +112,10 @@ def test_perform_login_reuses_solver_and_stop_callback(monkeypatch: pytest.Monke
             settings: AppSettings,
             browser: BrowserManager,
             solver: object,
-            is_stopped: object,
+            stop: StopToken,
         ) -> None:
             observed_solver_ids.append(id(solver))
-            observed_stop_values.append(bool(is_stopped()))
+            observed_stop_values.append(stop.is_set())
 
         def login(self) -> SessionData:
             return SessionData(cookies={"SESSION": "abc"}, token="token", batch_code="batch")

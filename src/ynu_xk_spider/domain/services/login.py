@@ -18,6 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
 from ...exceptions import CaptchaError, LoginError, StopRequestedError
+from ...utils.stop import StopToken
 from ..models import SessionData
 
 if TYPE_CHECKING:
@@ -54,7 +55,7 @@ class LoginService:
         settings: AppSettings,
         browser: BrowserManager,
         solver: CaptchaSolver,
-        is_stopped: Callable[[], bool] | None = None,
+        stop: StopToken | None = None,
     ) -> None:
         """Initialize login service.
 
@@ -62,12 +63,12 @@ class LoginService:
             settings: Application settings.
             browser: Browser manager for WebDriver access.
             solver: Captcha solver instance.
-            is_stopped: Optional callback indicating whether shutdown was requested.
+            stop: Optional stop token signaling shutdown requests.
         """
         self._settings = settings
         self._browser = browser
         self._solver = solver
-        self._is_stopped = is_stopped or (lambda: False)
+        self._stop = stop or StopToken()
 
     def login(self) -> SessionData:
         """Perform login and return session data.
@@ -512,7 +513,7 @@ class LoginService:
         """Wait for a Selenium condition while allowing stop interruption."""
         deadline = time.monotonic() + timeout
         while True:
-            self._ensure_not_stopped()
+            self._stop.raise_if_set()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutException()
@@ -522,18 +523,12 @@ class LoginService:
                 continue
 
     def _wait_or_stop(self, delay: float) -> None:
-        """Sleep in short slices and abort when stop is requested."""
-        deadline = time.monotonic() + delay
-        while True:
-            self._ensure_not_stopped()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(0.1, remaining))
+        """Block for a delay, aborting when stop is requested.
 
-    def _ensure_not_stopped(self) -> None:
-        """Raise when a stop request has been observed."""
-        if self._is_stopped():
+        Raises:
+            StopRequestedError: If stop is requested before the delay elapses.
+        """
+        if not self._stop.wait(delay):
             raise StopRequestedError("Stop requested")
 
     def _extract_session_data(self, driver: WebDriver) -> SessionData:

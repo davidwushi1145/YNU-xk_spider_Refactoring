@@ -16,6 +16,7 @@ from ..utils.retry import retry
 
 if TYPE_CHECKING:
     from ..config import AppSettings
+    from ..utils.stop import StopToken
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +54,17 @@ class HttpClient:
     def __init__(
         self,
         settings: AppSettings,
-        stop_event: threading.Event | None = None,
+        stop: StopToken | None = None,
     ) -> None:
         """Initialize HTTP client.
 
         Args:
             settings: Application settings.
-            stop_event: Optional stop event used to interrupt retry backoff.
+            stop: Optional stop token used to interrupt retry backoff.
         """
         self._settings = settings
         self._timeout = settings.http_timeout
-        self._stop_event = stop_event
+        self._stop = stop
         self._thread_local = threading.local()
         self._sessions: list[requests.Session] = []
         self._sessions_lock = threading.Lock()
@@ -158,10 +159,10 @@ class HttpClient:
 
     def _sleep_for_retry(self, delay: float) -> bool:
         """Sleep between retries, aborting early when stop is requested."""
-        if self._stop_event is None:
+        if self._stop is None:
             time.sleep(delay)
             return True
-        return not self._stop_event.wait(delay)
+        return self._stop.wait(delay)
 
     def _create_retry_decorator(
         self,

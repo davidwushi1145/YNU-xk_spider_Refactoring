@@ -17,6 +17,7 @@ from ..models import MonitorOutcome
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
+    from ...utils.stop import StopToken
     from ..models import CourseInfo, CourseType
     from .course_api import CourseApiClient
 
@@ -129,14 +130,14 @@ class CourseSelector:
         self,
         course: CourseItem,
         course_type: CourseType,
-        is_stopped: Callable[[], bool],
+        stop: StopToken,
     ) -> MonitorOutcome:
         """Monitor a single course and attempt selection when available.
 
         Args:
             course: Target course configuration.
             course_type: Course category of the target.
-            is_stopped: Callable returning True when stop requested.
+            stop: Stop token honored during monitoring.
 
         Returns:
             Monitoring outcome for this single target.
@@ -145,7 +146,7 @@ class CourseSelector:
             course_name=course.name,
             course_type=course_type,
             targets=[course],
-            is_stopped=is_stopped,
+            stop=stop,
         )
 
     def run_group_monitoring_loop(
@@ -153,7 +154,7 @@ class CourseSelector:
         course_name: str,
         course_type: CourseType,
         targets: Sequence[CourseItem],
-        is_stopped: Callable[[], bool],
+        stop: StopToken,
     ) -> MonitorOutcome:
         """Monitor a course group with one shared query per polling cycle."""
         pending_targets = list(targets)
@@ -170,7 +171,7 @@ class CourseSelector:
         fail_count = 0
         max_consecutive_failures = 5
 
-        while pending_targets and not is_stopped():
+        while pending_targets and not stop.is_set():
             try:
                 courses = self._api.query_courses(course_name, course_type)
 
@@ -180,14 +181,14 @@ class CourseSelector:
                         "[%s] No courses found",
                         course_name,
                     )
-                    if not self._wait_random(is_stopped):
+                    if not self._wait_random(stop):
                         return MonitorOutcome.STOPPED
                     continue
 
                 remaining_targets: list[CourseItem] = []
                 for index, target in enumerate(pending_targets):
                     try:
-                        if is_stopped():
+                        if stop.is_set():
                             return MonitorOutcome.STOPPED
 
                         teacher_slots = self._api.find_courses_by_teacher(
@@ -226,7 +227,7 @@ class CourseSelector:
                     return MonitorOutcome.SUCCESS
 
                 pending_targets = remaining_targets
-                if not self._wait_random(is_stopped):
+                if not self._wait_random(stop):
                     return MonitorOutcome.STOPPED
                 fail_count = 0
 
@@ -240,7 +241,7 @@ class CourseSelector:
                     exc=exc,
                     fail_count=fail_count,
                     max_consecutive_failures=max_consecutive_failures,
-                    is_stopped=is_stopped,
+                    stop=stop,
                     log_method=logger.warning,
                     log_message="[%s] Error: %s (fail %d)",
                 )
@@ -253,14 +254,14 @@ class CourseSelector:
                     exc=exc,
                     fail_count=fail_count,
                     max_consecutive_failures=max_consecutive_failures,
-                    is_stopped=is_stopped,
+                    stop=stop,
                     log_method=logger.error,
                     log_message="[%s] Unexpected error: %s (fail %d)",
                 )
                 if outcome is not None:
                     return outcome
 
-        return MonitorOutcome.STOPPED if is_stopped() else MonitorOutcome.FAILED
+        return MonitorOutcome.STOPPED if stop.is_set() else MonitorOutcome.FAILED
 
     def _handle_monitoring_failure(
         self,
@@ -268,13 +269,13 @@ class CourseSelector:
         exc: Exception,
         fail_count: int,
         max_consecutive_failures: int,
-        is_stopped: Callable[[], bool],
+        stop: StopToken,
         *,
         log_method: Callable[..., None],
         log_message: str,
     ) -> tuple[int, MonitorOutcome | None]:
         """Handle a failed monitoring attempt and decide whether to retry."""
-        if is_stopped():
+        if stop.is_set():
             return fail_count, MonitorOutcome.STOPPED
 
         fail_count += 1
@@ -284,7 +285,7 @@ class CourseSelector:
             logger.error("[%s] Too many failures, stopping", course_name)
             return fail_count, MonitorOutcome.FAILED
 
-        if not self._wait_with_stop(5, is_stopped):
+        if not self._wait_with_stop(5, stop):
             return fail_count, MonitorOutcome.STOPPED
 
         return fail_count, None
@@ -357,24 +358,18 @@ class CourseSelector:
         self._hot_path_log_times[key] = now
         logger.debug(message, *args)
 
-    def _wait_random(self, is_stopped: Callable[[], bool]) -> bool:
+    def _wait_random(self, stop: StopToken) -> bool:
         """Wait for a random interval within configured bounds."""
         interval = random.uniform(
             self._settings.poll_interval_min,
             self._settings.poll_interval_max,
         )
-        return self._wait_with_stop(interval, is_stopped)
+        return self._wait_with_stop(interval, stop)
 
-    def _wait_with_stop(
-        self,
-        delay: float,
-        is_stopped: Callable[[], bool],
-    ) -> bool:
-        """Sleep in short slices so stop requests can interrupt polling."""
-        deadline = time.monotonic() + delay
-        while not is_stopped():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return True
-            time.sleep(min(0.1, remaining))
-        return False
+    def _wait_with_stop(self, delay: float, stop: StopToken) -> bool:
+        """Block for a delay unless stop is requested first.
+
+        Returns:
+            True if the full delay elapsed, False when interrupted by stop.
+        """
+        return stop.wait(delay)
