@@ -13,7 +13,7 @@ from ynu_xk_spider.domain.models import (
     SelectionResult,
 )
 from ynu_xk_spider.domain.services.course_selector import CourseSelector
-from ynu_xk_spider.domain.services.notification import AsyncNotifier
+from ynu_xk_spider.domain.services.notification import AsyncNotifier, ServerChanNotifier
 from ynu_xk_spider.exceptions import CourseSelectionError, NetworkError
 from ynu_xk_spider.utils.stop import StopToken
 
@@ -140,6 +140,17 @@ def test_async_notifier_skips_sending_when_disabled() -> None:
     notifier.flush()
 
     assert inner.messages == []
+
+
+def test_default_notifier_does_not_create_an_unowned_async_executor() -> None:
+    settings = AppSettings(
+        student_code="20230001",
+        password="secret",
+        server_chan_key="configured",
+    )
+    selector = CourseSelector(api=_FakeApi(), settings=settings)
+
+    assert isinstance(selector._notifier, ServerChanNotifier)
 
 
 def test_group_monitoring_queries_once_for_multiple_teachers() -> None:

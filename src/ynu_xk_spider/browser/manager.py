@@ -37,7 +37,7 @@ class BrowserManager:
         self._settings = settings
         self._driver: WebDriver | None = None
         self._driver_lock = threading.Lock()
-        atexit.register(self.shutdown)
+        self._atexit_registered = False
 
     def get_driver(self) -> WebDriver:
         """Get or create a live WebDriver instance.
@@ -54,7 +54,14 @@ class BrowserManager:
         with self._driver_lock:
             if self._driver is None:
                 self._driver = self._create_driver()
+                self._register_atexit_hook()
         return self._driver
+
+    def _register_atexit_hook(self) -> None:
+        """Register last-resort cleanup while a live driver is owned."""
+        if not self._atexit_registered:
+            atexit.register(self._shutdown_at_exit)
+            self._atexit_registered = True
 
     def _create_driver(self) -> WebDriver:
         """Create a new Chrome WebDriver instance."""
@@ -114,6 +121,14 @@ class BrowserManager:
 
     def shutdown(self) -> None:
         """Quit the WebDriver if present. Safe to call multiple times."""
+        self._shutdown(unregister_atexit=True)
+
+    def _shutdown_at_exit(self) -> None:
+        """Quit the driver during interpreter shutdown."""
+        self._shutdown(unregister_atexit=False)
+
+    def _shutdown(self, *, unregister_atexit: bool) -> None:
+        """Release the driver and optionally remove its exit hook."""
         with self._driver_lock:
             if self._driver is not None:
                 try:
@@ -123,6 +138,9 @@ class BrowserManager:
                     logger.warning("Error during WebDriver shutdown: %s", exc)
                 finally:
                     self._driver = None
+            if unregister_atexit and self._atexit_registered:
+                atexit.unregister(self._shutdown_at_exit)
+                self._atexit_registered = False
 
     def restart(self) -> WebDriver:
         """Shutdown and create a fresh driver instance.

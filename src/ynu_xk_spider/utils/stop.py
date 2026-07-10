@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import weakref
 
 from ..exceptions import StopRequestedError
 
@@ -19,7 +20,8 @@ class StopToken:
 
     def __init__(self) -> None:
         self._event = threading.Event()
-        self._children: list[StopToken] = []
+        self._children: weakref.WeakSet[StopToken] = weakref.WeakSet()
+        self._parent: StopToken | None = None
         self._lock = threading.Lock()
 
     def set(self) -> None:
@@ -29,6 +31,7 @@ class StopToken:
             children = list(self._children)
         for child in children:
             child.set()
+        self._parent = None
 
     def is_set(self) -> bool:
         """Return True if stop has been requested."""
@@ -57,9 +60,10 @@ class StopToken:
     def child(self) -> StopToken:
         """Create a linked token that also stops when this one does."""
         token = StopToken()
+        # Keep the propagation chain alive while any descendant remains active.
+        token._parent = self
         with self._lock:
-            self._children = [c for c in self._children if not c.is_set()]
-            self._children.append(token)
+            self._children.add(token)
         if self._event.is_set():
             token.set()
         return token

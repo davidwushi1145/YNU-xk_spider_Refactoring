@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
 from ..models import MonitorOutcome
-from .notification import AsyncNotifier, Notifier, ServerChanNotifier
+from .notification import Notifier, ServerChanNotifier
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
@@ -49,13 +49,16 @@ class CourseSelector:
         Args:
             api: Course API client.
             settings: Application settings.
-            notifier: Optional notification sink; defaults to async
-                ServerChan push configured from settings.
+            notifier: Optional notification sink; defaults to synchronous
+                ServerChan push configured from settings. Callers that need
+                non-blocking delivery should inject and own an AsyncNotifier.
         """
         self._api = api
         self._settings = settings
-        self._notifier: Notifier = notifier or AsyncNotifier(
-            ServerChanNotifier(settings.server_chan_key)
+        self._notifier: Notifier = (
+            notifier
+            if notifier is not None
+            else ServerChanNotifier(settings.server_chan_key)
         )
         self._hot_path_log_times: dict[str, float] = {}
 

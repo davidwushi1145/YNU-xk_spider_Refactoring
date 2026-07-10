@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import threading
 import time
+import weakref
 
 import pytest
 
@@ -48,3 +50,36 @@ def test_child_of_already_stopped_parent_is_set() -> None:
     parent = StopToken()
     parent.set()
     assert parent.child().is_set()
+
+
+def test_unreferenced_child_can_be_garbage_collected() -> None:
+    parent = StopToken()
+    child = parent.child()
+    child_ref = weakref.ref(child)
+
+    del child
+    gc.collect()
+
+    assert child_ref() is None
+
+
+def test_live_descendant_keeps_stop_propagation_chain_alive() -> None:
+    parent = StopToken()
+    grandchild = parent.child().child()
+
+    gc.collect()
+    parent.set()
+
+    assert grandchild.is_set()
+
+
+def test_stopped_child_releases_its_parent() -> None:
+    parent = StopToken()
+    child = parent.child()
+    parent_ref = weakref.ref(parent)
+
+    child.set()
+    del parent
+    gc.collect()
+
+    assert parent_ref() is None
