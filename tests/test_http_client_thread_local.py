@@ -28,13 +28,16 @@ class _FakeSession:
         self.should_fail = should_fail
         self.closed = False
 
-    def get(self, url: str, **kwargs: Any) -> Any:
+    def request(self, method: str, url: str, **kwargs: Any) -> Any:
         if self.should_fail:
             raise requests.RequestException("boom")
-        raise AssertionError("GET should not be called in this test")
+        raise AssertionError("No real request expected in this test")
+
+    def get(self, url: str, **kwargs: Any) -> Any:
+        raise AssertionError("Client must go through Session.request")
 
     def post(self, url: str, **kwargs: Any) -> Any:
-        raise AssertionError("POST should not be called in this test")
+        raise AssertionError("Client must go through Session.request")
 
     def close(self) -> None:
         self.closed = True
