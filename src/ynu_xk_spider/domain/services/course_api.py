@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 from ...exceptions import NetworkError, SessionExpiredError
 from ...http.endpoints import Endpoints
-from ..models import CourseInfo, QueryRequest, SelectionRequest, SelectionResult
+from ..models import (
+    CourseInfo,
+    CourseType,
+    QueryRequest,
+    SelectionRequest,
+    SelectionResult,
+)
 
 if TYPE_CHECKING:
     from ...http.client import HttpClient
@@ -54,13 +60,13 @@ class CourseApiClient:
     def query_courses(
         self,
         course_name: str,
-        course_type: str,
+        course_type: CourseType,
     ) -> list[CourseInfo]:
         """Query available courses by name.
 
         Args:
             course_name: Course name to search.
-            course_type: One of "素选", "主修", "体育".
+            course_type: Course category to query.
 
         Returns:
             List of matching course information.
@@ -72,13 +78,16 @@ class CourseApiClient:
         if not token:
             raise NetworkError("No auth token available")
 
-        url = self._endpoints.get_course_url(course_type, token)
-        class_type = Endpoints.get_class_type(course_type)
+        url = (
+            self._endpoints.public_course(token)
+            if course_type is CourseType.PUBLIC
+            else self._endpoints.program_course(token)
+        )
 
         request = QueryRequest(
             student_code=self._student_code,
             batch_code=self._batch_code,
-            class_type=class_type,
+            class_type=course_type.class_type_code,
             query_content=course_name,
             campus=self._campus,
         )
@@ -92,12 +101,16 @@ class CourseApiClient:
 
         return self._parse_course_list(data, course_type)
 
-    def _parse_course_list(self, data: dict[str, Any], course_type: str) -> list[CourseInfo]:
+    def _parse_course_list(
+        self,
+        data: dict[str, Any],
+        course_type: CourseType,
+    ) -> list[CourseInfo]:
         """Parse course list from API response.
 
         Args:
             data: API response data.
-            course_type: Course type for endpoint detection.
+            course_type: Course category (drives the response shape).
 
         Returns:
             Parsed course information list.
@@ -108,7 +121,7 @@ class CourseApiClient:
         if not data_list:
             return courses
 
-        if course_type in ("主修", "体育"):
+        if course_type.nested_response:
             for category in data_list:
                 tc_list = category.get("tcList", [])
                 for item in tc_list:
@@ -144,13 +157,13 @@ class CourseApiClient:
     def select_course(
         self,
         course: CourseInfo,
-        course_type: str,
+        course_type: CourseType,
     ) -> SelectionResult:
         """Attempt to select a course.
 
         Args:
             course: Target course information.
-            course_type: Course type for API endpoint.
+            course_type: Course category of the target.
 
         Returns:
             Selection result with success status and message.
@@ -165,13 +178,12 @@ class CourseApiClient:
             )
 
         url = self._endpoints.volunteer(token)
-        class_type = Endpoints.get_class_type(course_type)
 
         request = SelectionRequest(
             student_code=self._student_code,
             batch_code=self._batch_code,
             teaching_class_id=course.teaching_class_id,
-            class_type=class_type,
+            class_type=course_type.class_type_code,
             campus=self._campus,
         )
 

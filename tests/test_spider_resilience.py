@@ -6,7 +6,7 @@ import pytest
 
 from ynu_xk_spider.browser.manager import BrowserManager
 from ynu_xk_spider.config import AppSettings, CourseItem, CoursesConfig
-from ynu_xk_spider.domain.models import MonitorOutcome, SessionData
+from ynu_xk_spider.domain.models import CourseType, MonitorOutcome, SessionData
 from ynu_xk_spider.exceptions import LoginError, StopRequestedError
 from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
 
@@ -65,7 +65,7 @@ def test_group_course_targets_merges_same_name_and_type() -> None:
     assert grouped == [
         (
             "Linear Algebra",
-            "素选",
+            CourseType.PUBLIC,
             [
                 CourseItem(name="Linear Algebra", teacher="Prof. Li"),
                 CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
@@ -73,7 +73,7 @@ def test_group_course_targets_merges_same_name_and_type() -> None:
         ),
         (
             "Swimming",
-            "体育",
+            CourseType.PE,
             [CourseItem(name="Swimming", teacher="Coach Lin")],
         ),
     ]

@@ -19,7 +19,7 @@ from .base import BaseSpider
 
 if TYPE_CHECKING:
     from ..config import AppSettings, CourseItem
-    from ..domain.models import SessionData
+    from ..domain.models import CourseTarget, CourseType, SessionData
 
 logger = logging.getLogger(__name__)
 
@@ -251,13 +251,13 @@ class YnuCourseSpider(BaseSpider):
 
     def _group_course_targets(
         self,
-        courses: list[tuple[CourseItem, str]],
-    ) -> list[tuple[str, str, list[CourseItem]]]:
+        courses: list[CourseTarget],
+    ) -> list[tuple[str, CourseType, list[CourseItem]]]:
         """Group targets by (course type, course name) to avoid duplicate queries."""
-        grouped: dict[tuple[str, str], list[CourseItem]] = {}
-        for course, course_type in courses:
-            key = (course_type, course.name)
-            grouped.setdefault(key, []).append(course)
+        grouped: dict[tuple[CourseType, str], list[CourseItem]] = {}
+        for target in courses:
+            key = (target.course_type, target.item.name)
+            grouped.setdefault(key, []).append(target.item)
 
         return [
             (course_name, course_type, targets)

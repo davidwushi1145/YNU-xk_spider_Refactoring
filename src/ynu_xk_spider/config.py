@@ -28,6 +28,8 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from .domain.models import CourseTarget, CourseType
+
 
 class CourseItem(BaseModel):
     """Single course target configuration."""
@@ -92,20 +94,22 @@ class CoursesConfig(BaseModel):
         return result
 
     @property
-    def all_courses(self) -> list[tuple[CourseItem, str]]:
-        """Return all courses with their category.
+    def all_courses(self) -> list[CourseTarget]:
+        """Return all configured targets with their course category.
 
         Returns:
-            List of tuples (CourseItem, category_label).
+            List of CourseTarget in public, program, pe order.
         """
-        result: list[tuple[CourseItem, str]] = []
-        for course in self.public:
-            result.append((course, "素选"))
-        for course in self.program:
-            result.append((course, "主修"))
-        for course in self.pe:
-            result.append((course, "体育"))
-        return result
+        groups: tuple[tuple[CourseType, list[CourseItem]], ...] = (
+            (CourseType.PUBLIC, self.public),
+            (CourseType.PROGRAM, self.program),
+            (CourseType.PE, self.pe),
+        )
+        return [
+            CourseTarget(item=item, course_type=course_type)
+            for course_type, items in groups
+            for item in items
+        ]
 
 
 class AppSettings(BaseSettings):

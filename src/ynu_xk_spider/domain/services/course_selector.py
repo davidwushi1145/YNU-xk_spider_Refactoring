@@ -17,7 +17,7 @@ from ..models import MonitorOutcome
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
-    from ..models import CourseInfo
+    from ..models import CourseInfo, CourseType
     from .course_api import CourseApiClient
 
 logger = logging.getLogger(__name__)
@@ -128,14 +128,14 @@ class CourseSelector:
     def run_monitoring_loop(
         self,
         course: CourseItem,
-        course_type: str,
+        course_type: CourseType,
         is_stopped: Callable[[], bool],
     ) -> MonitorOutcome:
         """Monitor a single course and attempt selection when available.
 
         Args:
             course: Target course configuration.
-            course_type: One of "素选", "主修", "体育".
+            course_type: Course category of the target.
             is_stopped: Callable returning True when stop requested.
 
         Returns:
@@ -151,7 +151,7 @@ class CourseSelector:
     def run_group_monitoring_loop(
         self,
         course_name: str,
-        course_type: str,
+        course_type: CourseType,
         targets: Sequence[CourseItem],
         is_stopped: Callable[[], bool],
     ) -> MonitorOutcome:
@@ -292,7 +292,7 @@ class CourseSelector:
     def _try_select_available_slots(
         self,
         course: CourseItem,
-        course_type: str,
+        course_type: CourseType,
         available_slots: Sequence[CourseInfo],
     ) -> bool:
         """Try selecting the target from available slots."""

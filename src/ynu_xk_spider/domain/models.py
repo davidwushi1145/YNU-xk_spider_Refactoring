@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 from enum import Enum
+from typing import TYPE_CHECKING, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from ..config import CourseItem
 
 
 class SessionData(BaseModel):
@@ -29,6 +33,48 @@ class MonitorOutcome(Enum):
     STOPPED = "stopped"
     SESSION_EXPIRED = "session_expired"
     FAILED = "failed"
+
+
+class CourseType(Enum):
+    """Course category with its API mapping attributes.
+
+    Single source of truth for how each category maps onto the selection
+    system API: display label, teachingClassType code, and response shape.
+
+    Attributes:
+        label: Human-readable category name used in logs.
+        class_type_code: teachingClassType value expected by the API.
+        nested_response: Whether the query response nests classes in tcList.
+    """
+
+    PUBLIC = ("素选", "XGXK", False)
+    PROGRAM = ("主修", "FANKC", True)
+    PE = ("体育", "TYKC", True)
+
+    def __init__(
+        self,
+        label: str,
+        class_type_code: str,
+        nested_response: bool,
+    ) -> None:
+        self.label = label
+        self.class_type_code = class_type_code
+        self.nested_response = nested_response
+
+    def __str__(self) -> str:
+        return self.label
+
+
+class CourseTarget(NamedTuple):
+    """A configured course target paired with its category.
+
+    Attributes:
+        item: Course name/teacher pair from configuration.
+        course_type: Category the course belongs to.
+    """
+
+    item: CourseItem
+    course_type: CourseType
 
 
 class CourseInfo(BaseModel):
@@ -70,14 +116,14 @@ class SelectionRequest(BaseModel):
         batch_code: Course selection batch code.
         teaching_class_id: Target class ID.
         class_type: Teaching class type code.
-        campus: Campus code (default "02").
+        campus: Campus code.
     """
 
     student_code: str
     batch_code: str
     teaching_class_id: str
     class_type: str
-    campus: str = "02" # Default campus code, can be modified if needed.
+    campus: str
 
     def to_api_payload(self) -> dict[str, str]:
         """Convert to API request payload format.
@@ -118,7 +164,7 @@ class QueryRequest(BaseModel):
     batch_code: str
     class_type: str
     query_content: str
-    campus: str = "02"
+    campus: str
 
     def to_api_payload(self) -> dict[str, str]:
         """Convert to API request payload format.

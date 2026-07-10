@@ -88,8 +88,13 @@ def main(config_path: Path | None = None) -> int:
 
     courses = settings.courses.all_courses
     logger.info("Target courses: %d", len(courses))
-    for course, ctype in courses:
-        logger.info("  [%s] %s - %s", ctype, course.name, course.teacher)
+    for target in courses:
+        logger.info(
+            "  [%s] %s - %s",
+            target.course_type.label,
+            target.item.name,
+            target.item.teacher,
+        )
 
     spider = YnuCourseSpider(settings)
 

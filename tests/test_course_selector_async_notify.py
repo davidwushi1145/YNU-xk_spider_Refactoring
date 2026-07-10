@@ -6,7 +6,12 @@ import time
 import pytest
 
 from ynu_xk_spider.config import AppSettings, CourseItem
-from ynu_xk_spider.domain.models import CourseInfo, MonitorOutcome, SelectionResult
+from ynu_xk_spider.domain.models import (
+    CourseInfo,
+    CourseType,
+    MonitorOutcome,
+    SelectionResult,
+)
 from ynu_xk_spider.domain.services.course_selector import CourseSelector
 from ynu_xk_spider.exceptions import CourseSelectionError, NetworkError
 
@@ -42,7 +47,7 @@ class _FakeApi:
             ),
         ]
 
-    def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+    def query_courses(self, course_name: str, course_type: CourseType) -> list[CourseInfo]:
         self.query_count += 1
         return self.slots
 
@@ -53,7 +58,7 @@ class _FakeApi:
     ) -> list[CourseInfo]:
         return [c for c in courses if teacher_name in c.teacher_name]
 
-    def select_course(self, course: CourseInfo, course_type: str) -> SelectionResult:
+    def select_course(self, course: CourseInfo, course_type: CourseType) -> SelectionResult:
         return SelectionResult(
             success=True,
             message="选课成功",
@@ -67,7 +72,7 @@ class _FailingQueryApi(_FakeApi):
         super().__init__()
         self._exc = exc
 
-    def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+    def query_courses(self, course_name: str, course_type: CourseType) -> list[CourseInfo]:
         self.query_count += 1
         raise self._exc
 
@@ -77,7 +82,7 @@ class _PartialFailureApi(_FakeApi):
         super().__init__()
         self.selection_attempts: dict[str, int] = {"Prof. Li": 0, "Prof. Wang": 0}
 
-    def select_course(self, course: CourseInfo, course_type: str) -> SelectionResult:
+    def select_course(self, course: CourseInfo, course_type: CourseType) -> SelectionResult:
         self.selection_attempts[course.teacher_name] += 1
         if course.teacher_name == "Prof. Wang" and self.selection_attempts[course.teacher_name] == 1:
             raise NetworkError("temporary selection failure")
@@ -92,7 +97,7 @@ def test_notifications_are_async_and_flushed_on_wait() -> None:
     course = CourseItem(name="Linear Algebra", teacher="Prof. Li")
 
     start = time.perf_counter()
-    result = selector.run_monitoring_loop(course, "素选", is_stopped=lambda: False)
+    result = selector.run_monitoring_loop(course, CourseType.PUBLIC, is_stopped=lambda: False)
     elapsed = time.perf_counter() - start
 
     assert result is MonitorOutcome.SUCCESS
@@ -110,7 +115,7 @@ def test_group_monitoring_queries_once_for_multiple_teachers() -> None:
 
     result = selector.run_group_monitoring_loop(
         course_name="Linear Algebra",
-        course_type="素选",
+        course_type=CourseType.PUBLIC,
         targets=[
             CourseItem(name="Linear Algebra", teacher="Prof. Li"),
             CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
@@ -129,7 +134,7 @@ def test_group_monitoring_with_empty_targets_is_success() -> None:
 
     result = selector.run_group_monitoring_loop(
         course_name="Linear Algebra",
-        course_type="素选",
+        course_type=CourseType.PUBLIC,
         targets=[],
         is_stopped=lambda: False,
     )
@@ -150,7 +155,7 @@ def test_monitoring_wait_is_interruptible() -> None:
     course = CourseItem(name="Nonexistent", teacher="Nobody")
 
     class _NoResultApi(_FakeApi):
-        def query_courses(self, course_name: str, course_type: str) -> list[CourseInfo]:
+        def query_courses(self, course_name: str, course_type: CourseType) -> list[CourseInfo]:
             self.query_count += 1
             return []
 
@@ -164,7 +169,7 @@ def test_monitoring_wait_is_interruptible() -> None:
     stopper.start()
 
     start = time.perf_counter()
-    result = selector.run_monitoring_loop(course, "素选", is_stopped=stop_event.is_set)
+    result = selector.run_monitoring_loop(course, CourseType.PUBLIC, is_stopped=stop_event.is_set)
     elapsed = time.perf_counter() - start
     stopper.join()
 
@@ -196,7 +201,7 @@ def test_monitoring_retries_failures_until_threshold(
         lambda delay, is_stopped: wait_delays.append(delay) or True,
     )
 
-    result = selector.run_monitoring_loop(course, "素选", is_stopped=lambda: False)
+    result = selector.run_monitoring_loop(course, CourseType.PUBLIC, is_stopped=lambda: False)
 
     assert result is MonitorOutcome.FAILED
     assert api.query_count == 5
@@ -219,7 +224,7 @@ def test_group_monitoring_preserves_successful_targets_across_target_failure(
 
     result = selector.run_group_monitoring_loop(
         course_name="Linear Algebra",
-        course_type="素选",
+        course_type=CourseType.PUBLIC,
         targets=[
             CourseItem(name="Linear Algebra", teacher="Prof. Li"),
             CourseItem(name="Linear Algebra", teacher="Prof. Wang"),
