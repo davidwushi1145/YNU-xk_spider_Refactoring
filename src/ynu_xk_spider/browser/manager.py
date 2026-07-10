@@ -1,4 +1,4 @@
-"""Thread-safe singleton WebDriver lifecycle manager."""
+"""Thread-safe WebDriver lifecycle manager."""
 
 from __future__ import annotations
 
@@ -21,52 +21,23 @@ logger = logging.getLogger(__name__)
 
 
 class BrowserManager:
-    """Singleton manager for WebDriver lifecycle.
+    """Manages the WebDriver lifecycle for its owner.
 
-    Thread-safe lazy initialization ensures only one driver instance exists.
-    Automatic cleanup is registered via atexit.
-
-    Attributes:
-        _instance: Singleton instance.
-        _inst_lock: Lock for singleton creation.
+    The spider creates one manager and owns its lifetime: the driver is
+    created lazily, shared while alive, and shut down by the owner (with
+    an atexit hook as a last resort). Shutdown is idempotent.
     """
 
-    _instance: BrowserManager | None = None
-    _inst_lock = threading.Lock()
-
     def __init__(self, settings: AppSettings) -> None:
-        """Initialize manager with settings. Use instance() instead."""
+        """Initialize manager with settings.
+
+        Args:
+            settings: Application settings for driver configuration.
+        """
         self._settings = settings
         self._driver: WebDriver | None = None
         self._driver_lock = threading.Lock()
         atexit.register(self.shutdown)
-
-    @classmethod
-    def instance(cls, settings: AppSettings) -> BrowserManager:
-        """Get or create the singleton instance.
-
-        Args:
-            settings: Application settings for driver configuration.
-
-        Returns:
-            The singleton BrowserManager instance.
-        """
-        if cls._instance is None:
-            with cls._inst_lock:
-                if cls._instance is None:
-                    cls._instance = cls(settings)
-                    logger.debug("BrowserManager singleton created")
-        elif cls._instance._settings != settings:
-            logger.warning("BrowserManager already initialized with different settings")
-        return cls._instance
-
-    @classmethod
-    def reset(cls) -> None:
-        """Reset singleton for testing purposes."""
-        with cls._inst_lock:
-            if cls._instance is not None:
-                cls._instance.shutdown()
-                cls._instance = None
 
     def get_driver(self) -> WebDriver:
         """Get or create a live WebDriver instance.

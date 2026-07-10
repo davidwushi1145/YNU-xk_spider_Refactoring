@@ -572,8 +572,4 @@ class LoginService:
 
         logger.info("Session extracted: token=%s..., batch=%s", token[:8], batch_code)
 
-        # Close browser after successful login (HTTP client takes over)
-        self._browser.shutdown()
-        logger.info("Browser closed after successful login")
-
         return SessionData(cookies=cookies, token=token, batch_code=batch_code)

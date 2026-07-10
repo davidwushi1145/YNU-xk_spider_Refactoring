@@ -50,7 +50,7 @@ class YnuCourseSpider(BaseSpider):
         """
         super().__init__()
         self._settings = settings
-        self._browser = BrowserManager.instance(settings)
+        self._browser = BrowserManager(settings)
         self._http = HttpClient(settings, stop=self.stop_token)
         self._solver = DdddocrSolver()
         self._max_workers = max_workers
@@ -98,7 +98,6 @@ class YnuCourseSpider(BaseSpider):
                     self.MAX_CONSECUTIVE_LOGIN_FAILURES,
                     exc,
                 )
-                self._browser.shutdown()
                 if login_failures >= self.MAX_CONSECUTIVE_LOGIN_FAILURES:
                     logger.error("Too many consecutive login failures, stopping spider")
                     self.stop()
@@ -108,7 +107,6 @@ class YnuCourseSpider(BaseSpider):
 
             except Exception as exc:
                 logger.error("Unexpected error: %s", exc)
-                self._browser.shutdown()
                 if not self._wait_or_stop(5):
                     break
 
@@ -122,6 +120,9 @@ class YnuCourseSpider(BaseSpider):
 
     def _perform_login(self) -> SessionData:
         """Perform login and return session data.
+
+        The browser is only needed while logging in; it is closed on every
+        exit path once the attempt finishes (the HTTP client takes over).
 
         Returns:
             SessionData if login succeeds.
@@ -142,6 +143,8 @@ class YnuCourseSpider(BaseSpider):
         except Exception as exc:
             logger.error("Login failed: %s", exc)
             raise LoginError(f"Login failed: {exc}") from exc
+        finally:
+            self._browser.shutdown()
 
     def _resolve_worker_count(self, total_courses: int) -> int:
         """Compute worker count for the thread pool."""

@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Generator
 from typing import Any
 
 import pytest
 
 from ynu_xk_spider.browser.manager import BrowserManager
 from ynu_xk_spider.config import AppSettings
-
-
-@pytest.fixture(autouse=True)
-def _reset_browser_manager() -> Generator[None, None, None]:
-    BrowserManager.reset()
-    yield
-    BrowserManager.reset()
 
 
 class _FakeDriver:
@@ -43,7 +35,7 @@ def test_chrome_password_prompt_is_disabled(
     )
 
     settings = AppSettings(student_code="20230001", password="secret")
-    manager = BrowserManager.instance(settings)
+    manager = BrowserManager(settings)
 
     driver = manager.get_driver()
     assert driver is fake_driver

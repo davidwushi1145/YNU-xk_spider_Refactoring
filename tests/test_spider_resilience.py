@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-
 import pytest
 
 from ynu_xk_spider.browser.manager import BrowserManager
@@ -10,13 +8,6 @@ from ynu_xk_spider.domain.models import CourseType, MonitorOutcome, SessionData
 from ynu_xk_spider.exceptions import LoginError, StopRequestedError
 from ynu_xk_spider.spiders.ynu_spider import YnuCourseSpider
 from ynu_xk_spider.utils.stop import StopToken
-
-
-@pytest.fixture(autouse=True)
-def _reset_browser_manager() -> Generator[None, None, None]:
-    BrowserManager.reset()
-    yield
-    BrowserManager.reset()
 
 
 def _build_settings() -> AppSettings:
