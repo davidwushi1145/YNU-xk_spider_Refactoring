@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import logging
 import random
-import threading
 import time
 from collections.abc import Callable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING
-
-import requests
 
 from ...exceptions import CourseSelectionError, NetworkError, SessionExpiredError
 from ..models import MonitorOutcome
+from .notification import AsyncNotifier, Notifier, ServerChanNotifier
 
 if TYPE_CHECKING:
     from ...config import AppSettings, CourseItem
@@ -22,40 +19,6 @@ if TYPE_CHECKING:
     from .course_api import CourseApiClient
 
 logger = logging.getLogger(__name__)
-
-
-class NotificationService:
-    """Simple notification service via ServerChan."""
-
-    def __init__(self, server_key: str | None = None) -> None:
-        """Initialize notification service.
-
-        Args:
-            server_key: ServerChan API key.
-        """
-        self._server_key = server_key
-
-    def send(self, title: str, content: str) -> None:
-        """Send notification via WeChat.
-
-        Args:
-            title: Notification title.
-            content: Notification body.
-        """
-        if not self._server_key:
-            return
-
-        try:
-            url = f"https://sctapi.ftqq.com/{self._server_key}.send"
-            requests.post(url, data={"text": title, "desp": content}, timeout=5)
-            logger.debug("Notification sent: %s", title)
-        except Exception as exc:
-            logger.warning("Notification failed: %s", exc)
-
-    @property
-    def enabled(self) -> bool:
-        """Whether notification sending is configured."""
-        return bool(self._server_key)
 
 
 class CourseSelector:
@@ -79,52 +42,22 @@ class CourseSelector:
         self,
         api: CourseApiClient,
         settings: AppSettings,
-        notifier: NotificationService | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         """Initialize course selector.
 
         Args:
             api: Course API client.
             settings: Application settings.
-            notifier: Optional notification service.
+            notifier: Optional notification sink; defaults to async
+                ServerChan push configured from settings.
         """
         self._api = api
         self._settings = settings
-        self._notifier = notifier or NotificationService(settings.server_chan_key)
-        self._notification_executor: ThreadPoolExecutor | None = None
-        self._notification_futures: list[Future[None]] = []
-        self._notification_lock = threading.Lock()
+        self._notifier: Notifier = notifier or AsyncNotifier(
+            ServerChanNotifier(settings.server_chan_key)
+        )
         self._hot_path_log_times: dict[str, float] = {}
-
-    def _notify_async(self, title: str, content: str) -> None:
-        """Send notifications off the critical selection path."""
-        if not self._notifier.enabled:
-            return
-        with self._notification_lock:
-            self._notification_futures = [
-                future for future in self._notification_futures if not future.done()
-            ]
-            if self._notification_executor is None:
-                self._notification_executor = ThreadPoolExecutor(
-                    max_workers=1,
-                    thread_name_prefix="notification-sender",
-                )
-            future = self._notification_executor.submit(self._notifier.send, title, content)
-            self._notification_futures.append(future)
-
-    def wait_for_notifications(self, timeout: float | None = None) -> None:
-        """Wait for pending async notifications to finish sending."""
-        with self._notification_lock:
-            futures = list(self._notification_futures)
-            executor = self._notification_executor
-            self._notification_futures.clear()
-            self._notification_executor = None
-
-        if futures:
-            wait(futures, timeout=timeout)
-
-        if executor is not None:
-            executor.shutdown(wait=timeout is None)
 
     def run_monitoring_loop(
         self,
@@ -307,14 +240,14 @@ class CourseSelector:
         for slot in available_slots:
             msg = f"Found spot! {course.name}-{course.teacher} remaining: {slot.remaining}"
             logger.info(msg)
-            self._notify_async("Course Alert", msg)
+            self._notifier.send("Course Alert", msg)
 
             result = self._api.select_course(slot, course_type)
 
             if result.success:
                 success_msg = f"Selection successful: {course.name}"
                 logger.info(success_msg)
-                self._notify_async("Selection Success", success_msg)
+                self._notifier.send("Selection Success", success_msg)
                 return True
 
             if "时间冲突" in result.message or "该课程与已选课程时间冲突" in result.message:

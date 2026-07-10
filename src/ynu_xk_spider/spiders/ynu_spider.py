@@ -12,6 +12,7 @@ from ..domain.models import MonitorOutcome
 from ..domain.services.course_api import CourseApiClient
 from ..domain.services.course_selector import CourseSelector
 from ..domain.services.login import LoginService
+from ..domain.services.notification import AsyncNotifier, ServerChanNotifier
 from ..exceptions import LoginError, StopRequestedError
 from ..http.client import HttpClient
 from .base import BaseSpider
@@ -53,6 +54,7 @@ class YnuCourseSpider(BaseSpider):
         self._browser = BrowserManager(settings)
         self._http = HttpClient(settings, stop=self.stop_token)
         self._solver = DdddocrSolver()
+        self._notifier = AsyncNotifier(ServerChanNotifier(settings.server_chan_key))
         self._max_workers = max_workers
 
     def run_loop(self) -> None:
@@ -75,7 +77,7 @@ class YnuCourseSpider(BaseSpider):
                     campus=self._settings.campus,
                 )
 
-                selector = CourseSelector(api, self._settings)
+                selector = CourseSelector(api, self._settings, notifier=self._notifier)
 
                 monitoring_result = self._run_monitoring(selector)
                 if monitoring_result is MonitorOutcome.STOPPED:
@@ -241,7 +243,7 @@ class YnuCourseSpider(BaseSpider):
 
             return MonitorOutcome.SUCCESS
         finally:
-            selector.wait_for_notifications()
+            self._notifier.flush()
 
     def on_stop(self) -> None:
         """Cleanup on spider stop."""

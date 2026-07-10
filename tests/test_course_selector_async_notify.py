@@ -13,6 +13,7 @@ from ynu_xk_spider.domain.models import (
     SelectionResult,
 )
 from ynu_xk_spider.domain.services.course_selector import CourseSelector
+from ynu_xk_spider.domain.services.notification import AsyncNotifier
 from ynu_xk_spider.exceptions import CourseSelectionError, NetworkError
 from ynu_xk_spider.utils.stop import StopToken
 
@@ -90,9 +91,10 @@ class _PartialFailureApi(_FakeApi):
         return super().select_course(course, course_type)
 
 
-def test_notifications_are_async_and_flushed_on_wait() -> None:
+def test_notifications_are_async_and_flushed() -> None:
     settings = AppSettings(student_code="20230001", password="secret")
-    notifier = _SlowNotifier()
+    inner = _SlowNotifier()
+    notifier = AsyncNotifier(inner)
     api = _FakeApi()
     selector = CourseSelector(api=api, settings=settings, notifier=notifier)
     course = CourseItem(name="Linear Algebra", teacher="Prof. Li")
@@ -104,9 +106,40 @@ def test_notifications_are_async_and_flushed_on_wait() -> None:
     assert result is MonitorOutcome.SUCCESS
     assert elapsed < 0.2
 
-    selector.wait_for_notifications()
-    assert len(notifier.messages) == 2
+    notifier.flush()
+    assert len(inner.messages) == 2
     assert api.query_count == 1
+
+
+def test_async_notifier_is_reusable_after_flush() -> None:
+    inner = _SlowNotifier()
+    notifier = AsyncNotifier(inner)
+
+    notifier.send("first", "1")
+    notifier.flush()
+    notifier.send("second", "2")
+    notifier.flush()
+
+    assert [title for title, _ in inner.messages] == ["first", "second"]
+
+
+def test_async_notifier_skips_sending_when_disabled() -> None:
+    class _DisabledNotifier:
+        enabled = False
+
+        def __init__(self) -> None:
+            self.messages: list[tuple[str, str]] = []
+
+        def send(self, title: str, content: str) -> None:
+            self.messages.append((title, content))
+
+    inner = _DisabledNotifier()
+    notifier = AsyncNotifier(inner)
+
+    notifier.send("ignored", "x")
+    notifier.flush()
+
+    assert inner.messages == []
 
 
 def test_group_monitoring_queries_once_for_multiple_teachers() -> None:

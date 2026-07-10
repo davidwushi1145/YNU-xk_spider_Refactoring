@@ -86,9 +86,6 @@ def test_run_monitoring_returns_stopped_for_manual_stop() -> None:
         def run_group_monitoring_loop(self, *args: object, **kwargs: object) -> MonitorOutcome:
             return MonitorOutcome.STOPPED
 
-        def wait_for_notifications(self, timeout: float | None = None) -> None:
-            return None
-
     assert spider._run_monitoring(_StoppedSelector()) is MonitorOutcome.STOPPED
 
 
